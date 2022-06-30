@@ -34,7 +34,6 @@ COMMON_FILES = [
 ]
 
 SHA1_RE = re.compile(r'\b[a-f\d]{40}\b')
-PACK_RE = re.compile(r'\bpack-' + SHA1_RE.pattern[2:])
 REF_RE = re.compile(r'\brefs/\S+')
 SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
@@ -171,7 +170,7 @@ class GitDumper:
         logger.debug("run: %r", cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
-            stdout=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
@@ -234,14 +233,15 @@ class GitDumper:
                 while num_entries:
                     entry_size = fp.tell()
                     fp.seek(40, io.SEEK_CUR)  # file attrs
-                    sha1 = fp.read(20).hex()
+                    # 20 байт хеш, 2 байта флаги
+                    sha1 = fp.read(22)[:-2].hex()
+                    assert len(sha1) == 40
                     hashes.append(sha1)
-                    fp.seek(2, io.SEEK_CUR)  # file flags
                     filename = b''
                     while (c := fp.read(1)) != b'\0':
                         assert c != b''  # Неожиданный конец
                         filename += c
-                    logger.debug("%s %s %s", git_url, sha1, filename.decode())
+                    logger.debug("%s %s%s", sha1, git_url, filename.decode())
                     entry_size -= fp.tell()
                     # Размер entry кратен 8 (добивается NULL-байтами)
                     fp.seek(entry_size % 8, io.SEEK_CUR)
@@ -253,19 +253,17 @@ class GitDumper:
         elif filename == 'objects/info/packs':
             # Содержит строки вида "P <hex>.pack"
             contents = download_path.read_text()
-            for pack in PACK_RE.findall(contents):
-                await download_queue.put(
-                    urljoin(git_url, f'objects/pack/{pack}.idx')
-                )
-                await download_queue.put(
-                    urljoin(git_url, f'objects/pack/{pack}.pack')
-                )
+            for sha1 in SHA1_RE.findall(contents):
+                for ext in ('idx', 'pack'):
+                    await download_queue.put(
+                        urljoin(git_url, f'objects/pack/pack-{sha1}.{ext}')
+                    )
         else:
             # https://stackoverflow.com/questions/16972031/how-to-unpack-all-objects-of-a-git-repository
             if filename.startswith('objects/pack/pack-') and filename.endswith(
                 ('.pack', '.idx')
             ):
-                logger.warn("I can't unpack %s", filename)
+                logger.warn("How to unpack %s?", filename)
                 return
 
             if re.fullmatch(r'objects/[a-f\d]{2}/[a-f\d]{38}', filename):
