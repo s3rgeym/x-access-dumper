@@ -4,8 +4,11 @@ import asyncio
 import cgi
 import dataclasses
 import io
+import os
 import re
 import typing
+import zlib
+from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote, urljoin
@@ -40,21 +43,31 @@ SHA1_OR_REF_RE = re.compile(
 
 @dataclasses.dataclass
 class GitDumper:
+    _: dataclasses.KW_ONLY
+    executor: Executor | None = None
     headers: LooseHeaders | None = None
     num_workers: int = 50
     output_directory: str | Path = 'output'
     override_existing: bool = False
     timeout: float = 15.0
-    user_agent: str = "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.268"
+    user_agent: str = (
+        "Mozilla/5.0"
+        " (compatible; YandexBot/3.0; +http://yandex.com/bots)"
+        " AppleWebKit/537.36 (KHTML, like Gecko)"
+        " Chrome/81.0.4044.268"
+    )
 
     def __post_init__(self) -> None:
-        # self.num_workers = num_workers or self.num_workers
-        for field in dataclasses.fields(self):
-            if (
-                not isinstance(field.default, dataclasses._MISSING_TYPE)
-                and getattr(self, field.name) is None
-            ):
-                setattr(self, field.name, field.default)
+        # Если None, то восстановить дефолтное
+        # for field in dataclasses.fields(self):
+        #     if (
+        #         not isinstance(field.default, dataclasses._MISSING_TYPE)
+        #         and getattr(self, field.name) is None
+        #     ):
+        #         setattr(self, field.name, field.default)
+        self.executor = self.executor or ProcessPoolExecutor(
+            max_workers=os.cpu_count() * 2
+        )
         if isinstance(self.output_directory, str):
             self.output_directory = Path(self.output_directory)
         if not isinstance(self.timeout, aiohttp.ClientTimeout):
@@ -190,7 +203,7 @@ class GitDumper:
             # При кодировании текста вырезаются, т.н. BAD CHARS, что делает невозможным
             # gzip-декодирование git-объектов
             if ct == 'text/html':
-                raise ValueError(f"bad content type ({ct}): {download_url}")
+                raise ValueError(f"content type: {ct} - {download_url}")
             download_path.parent.mkdir(parents=True, exist_ok=True)
             with download_path.open('wb') as fp:
                 async for chunk in response.content.iter_chunked(8192):
@@ -247,8 +260,25 @@ class GitDumper:
                 await download_queue.put(
                     urljoin(git_url, f'objects/pack/{pack}.pack')
                 )
-        elif not filename.startswith('objects/'):
-            contents = download_path.read_text()
+        else:
+            # https://stackoverflow.com/questions/16972031/how-to-unpack-all-objects-of-a-git-repository
+            if filename.startswith('objects/pack/pack-') and filename.endswith(
+                ('.pack', '.idx')
+            ):
+                logger.warn("I can't unpack %s", filename)
+                return
+
+            if re.fullmatch(r'objects/[a-f\d]{2}/[a-f\d]{38}', filename):
+                contents = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, zlib.decompress, download_path.read_bytes()
+                )
+                if contents.startswith(b'blob'):
+                    logger.debug("skip blob: %s", filename)
+                    return
+                contents = contents.decode()
+            else:
+                contents = download_path.read_text()
+
             for match in SHA1_OR_REF_RE.finditer(contents):
                 group = match.groupdict()
                 if group['sha1']:
