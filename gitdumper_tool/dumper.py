@@ -30,6 +30,13 @@ COMMON_FILES = [
     'packed-refs',
 ]
 
+SHA1_RE = re.compile(r'\b[a-f\d]{40}\b')
+PACK_RE = re.compile(r'\bpack-' + SHA1_RE.pattern[2:])
+REF_RE = re.compile(r'\brefs/\S+')
+SHA1_OR_REF_RE = re.compile(
+    '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
+)
+
 
 @dataclasses.dataclass
 class GitDumper:
@@ -151,10 +158,10 @@ class GitDumper:
         logger.debug("run: %r", cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdin, stderr = await proc.communicate()
+        _, stderr = await proc.communicate()
         if proc.returncode == 0:
             logger.info("source retrieved: %s", git_path)
         else:
@@ -191,6 +198,9 @@ class GitDumper:
 
         logger.info("downloaded: %s", download_url)
 
+    def sha12filename(self, sha1: str) -> str:
+        return f'objects/{sha1[:2]}/{sha1[2:]}'
+
     async def parse(
         self,
         download_path: Path,
@@ -198,56 +208,55 @@ class GitDumper:
         download_queue: asyncio.Queue,
     ) -> None:
         git_url = download_url[: download_url.rfind('.git/') + len('.git/')]
-        _, relname = str(download_path).rsplit('.git/', 2)
-        match relname:
-            case 'HEAD':
-                # ref: refs/heads/main
-                contents = download_path.read_text()
-                if match := re.search(r'\brefs/\S+', contents):
-                    ref = match.group()
-                    for prefix in ['', 'logs/']:
-                        await download_queue.put(
-                            urljoin(git_url, f'{prefix}{ref}')
-                        )
-            case 'index':
-                # https://git-scm.com/docs/index-format
-                hashes = []
-                with download_path.open('rb') as fp:
-                    sig, ver, num_entries = read_struct(fp, '!4s2I')
-                    assert sig == b'DIRC'
-                    assert ver in (2, 3, 4)
-                    assert num_entries > 0
-                    logger.debug("num entries: %d", num_entries)
-                    while num_entries:
-                        entry_size = fp.tell()
-                        fp.seek(40, io.SEEK_CUR)  # file attrs
-                        sha1 = fp.read(20).hex()
-                        hashes.append(sha1)
-                        fp.seek(2, io.SEEK_CUR)  # file flags
-                        filename = b''
-                        while (c := fp.read(1)) != b'\0':
-                            assert c != b''  # Неожиданный конец
-                            filename += c
-                        logger.debug(
-                            "%s %s %s", git_url, sha1, filename.decode()
-                        )
-                        entry_size -= fp.tell()
-                        # Размер entry кратен 8 (добивается NULL-байтами)
-                        fp.seek(entry_size % 8, io.SEEK_CUR)
-                        num_entries -= 1
-                for sha1 in hashes:
+        _, filename = str(download_path).rsplit('.git/', 2)
+        if filename == 'index':
+            # https://git-scm.com/docs/index-format
+            hashes = []
+            with download_path.open('rb') as fp:
+                sig, ver, num_entries = read_struct(fp, '!4s2I')
+                assert sig == b'DIRC'
+                assert ver in (2, 3, 4)
+                assert num_entries > 0
+                logger.debug("num entries: %d", num_entries)
+                while num_entries:
+                    entry_size = fp.tell()
+                    fp.seek(40, io.SEEK_CUR)  # file attrs
+                    sha1 = fp.read(20).hex()
+                    hashes.append(sha1)
+                    fp.seek(2, io.SEEK_CUR)  # file flags
+                    filename = b''
+                    while (c := fp.read(1)) != b'\0':
+                        assert c != b''  # Неожиданный конец
+                        filename += c
+                    logger.debug("%s %s %s", git_url, sha1, filename.decode())
+                    entry_size -= fp.tell()
+                    # Размер entry кратен 8 (добивается NULL-байтами)
+                    fp.seek(entry_size % 8, io.SEEK_CUR)
+                    num_entries -= 1
+            for sha1 in hashes:
+                await download_queue.put(
+                    urljoin(git_url, self.sha12filename(sha1))
+                )
+        elif filename == 'objects/info/packs':
+            # Содержит строки вида "P <hex>.pack"
+            contents = download_path.read_text()
+            for pack in PACK_RE.findall(contents):
+                await download_queue.put(
+                    urljoin(git_url, f'objects/pack/{pack}.idx')
+                )
+                await download_queue.put(
+                    urljoin(git_url, f'objects/pack/{pack}.pack')
+                )
+        elif not filename.startswith('objects/'):
+            contents = download_path.read_text()
+            for match in SHA1_OR_REF_RE.finditer(contents):
+                group = match.groupdict()
+                if group['sha1']:
                     await download_queue.put(
-                        urljoin(git_url, f'objects/{sha1[:2]}/{sha1[2:]}')
+                        urljoin(git_url, self.sha12filename(group['sha1']))
                     )
-            case 'objects/info/packs':
-                # Содержит строки вида "P <hex>.pack"
-                contents = download_path.read_text()
-                for pack in re.findall(r'\bpack\-[\da-f]{40}\b', contents):
+                    continue
+                for prefix in ['', 'logs/']:
                     await download_queue.put(
-                        urljoin(git_url, f'objects/pack/{pack}.idx')
+                        urljoin(git_url, f"{prefix}{group['ref']}")
                     )
-                    await download_queue.put(
-                        urljoin(git_url, f'objects/pack/{pack}.pack')
-                    )
-            case 'packed-refs':
-                pass
