@@ -34,10 +34,10 @@ COMMON_FILES = [
 @dataclasses.dataclass
 class GitDumper:
     headers: LooseHeaders | None = None
-    num_workers: int = 10
+    num_workers: int = 50
     output_directory: str | Path = 'output'
     override_existing: bool = False
-    timeout: float = 30.0
+    timeout: float = 15.0
     user_agent: str = "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.268"
 
     def __post_init__(self) -> None:
@@ -177,7 +177,7 @@ class GitDumper:
         download_path: Path,
     ) -> None:
         response: aiohttp.ClientResponse
-        async with session.get(download_url) as response:
+        async with session.get(download_url, allow_redirects=False) as response:
             response.raise_for_status()
             ct, _ = cgi.parse_header(response.headers.get('content-type', ''))
             if ct == 'text/html':

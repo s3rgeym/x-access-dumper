@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "gitdumper"
+name = "gitdumper-tool"
 version = "0.1.0"
 description = "Git Dumper Tool"
 authors = ["tz4678 <tz4678@gmail.com>"]
@@ -22,4 +22,4 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-gitdumper = "gitdumper.cli:main"
+gitdumper = "gitdumper_tool.cli:main"
