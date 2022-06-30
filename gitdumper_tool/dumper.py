@@ -186,6 +186,7 @@ class GitDumper:
             logger.info("source retrieved: %s", git_path)
         else:
             logger.error(stderr.decode())
+            logger.error("can't retrieve source: %s", git_path)
 
     @asynccontextmanager
     async def get_session(self) -> typing.AsyncIterable[aiohttp.ClientSession]:
