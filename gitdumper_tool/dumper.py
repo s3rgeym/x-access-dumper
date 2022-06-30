@@ -11,11 +11,11 @@ import zlib
 from collections import namedtuple
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import TaskData, unquote, urljoin
 
 import aiohttp
 from aiohttp.typedefs import LooseHeaders
-from file_pathlib import Path
 
 from .logger import logger
 from .utils import read_struct
