@@ -88,8 +88,7 @@ class GitDumper:
         normalized_urls = list(map(self.normalize_url, urls))
         for file in COMMON_FILES:
             for git_url in normalized_urls:
-                download_url = TaskData(git_url, file)
-                task_queue.put_nowait(download_url)
+                task_queue.put_nowait(TaskData(git_url, file))
 
         # Посещенные ссылки
         seen_urls = set()
