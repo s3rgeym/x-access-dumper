@@ -7,3 +7,4 @@ __pycache__
 /output
 /err.log
 /urls.txt
+/*.dump.sql
