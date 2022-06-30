@@ -8,10 +8,11 @@ import os
 import re
 import typing
 import zlib
+from collections import namedtuple
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import unquote, urljoin
+from urllib.parse import TaskData, unquote, urljoin
 
 import aiohttp
 from aiohttp.typedefs import LooseHeaders
@@ -38,6 +39,8 @@ REF_RE = re.compile(r'\brefs/\S+')
 SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
 )
+
+TaskData = namedtuple('TaskData', 'git_url filename')
 
 
 @dataclasses.dataclass
@@ -81,45 +84,49 @@ class GitDumper:
         return url
 
     async def run(self, urls: typing.Sequence[str]) -> None:
-        download_queue = asyncio.Queue()
+        task_queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
         for file in COMMON_FILES:
             for git_url in normalized_urls:
-                download_url = urljoin(git_url, file)
-                download_queue.put_nowait(download_url)
+                download_url = TaskData(git_url, file)
+                task_queue.put_nowait(download_url)
 
         # Посещенные ссылки
         seen_urls = set()
 
         # Запускаем задания в фоне
         workers = [
-            asyncio.create_task(self.worker(download_queue, seen_urls))
+            asyncio.create_task(self.worker(task_queue, seen_urls))
             for _ in range(self.num_workers)
         ]
 
         # Ждем пока очередь станет пустой
-        await download_queue.join()
+        await task_queue.join()
 
         # Останавливаем задания
         for _ in range(self.num_workers):
-            await download_queue.put(None)
+            await task_queue.put(None)
 
         for w in workers:
             await w
 
         for git_url in normalized_urls:
-            await self.retrieve_source_code(self.get_download_path(git_url))
+            await self.retrieve_source_code(self.url2localpath(git_url))
 
     async def worker(
-        self, download_queue: asyncio.Queue, seen_urls: set[str]
+        self, task_queue: asyncio.Queue, seen_urls: set[str]
     ) -> None:
         async with self.get_session() as session:
             while True:
                 try:
-                    download_url = await download_queue.get()
+                    task_data = await task_queue.get()
 
-                    if download_url is None:
+                    if task_data is None:
                         break
+
+                    download_url = urljoin(
+                        task_data.git_url, task_data.filename
+                    )
 
                     if download_url in seen_urls:
                         logger.debug("already seen %s", download_url)
@@ -128,12 +135,12 @@ class GitDumper:
                     seen_urls.add(download_url)
 
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
-                    download_path = self.get_download_path(download_url)
+                    path = self.url2localpath(download_url)
 
-                    if self.override_existing or not download_path.exists():
+                    if self.override_existing or not path.exists():
                         try:
                             await self.download_file(
-                                session, download_url, download_path
+                                session, download_url, path
                             )
                         except Exception as e:
                             if isinstance(e, aiohttp.ClientResponseError):
@@ -145,32 +152,34 @@ class GitDumper:
                                 )
                             else:
                                 logger.error("error: %s", e)
-                            if download_path.exists():
-                                logger.debug("delete: %s", download_path)
-                                download_path.unlink()
+                            if path.exists():
+                                logger.debug("delete: %s", path)
+                                path.unlink()
                             continue
                     else:
-                        logger.debug("file exists: %s", download_path)
+                        logger.debug("file exists: %s", path)
 
-                    await self.parse(
-                        download_path, download_url, download_queue
-                    )
+                    await self.parse_file(path, task_data, task_queue)
                 except Exception as ex:
                     logger.error("an unexpected error has occurred: %s", ex)
                 finally:
-                    download_queue.task_done()
+                    task_queue.task_done()
 
-    def get_download_path(self, download_url: str) -> Path:
+    def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
             unquote(download_url.split('://')[1])
         )
 
     async def retrieve_source_code(self, git_path: Path) -> None:
-        cmd = f"git --git-dir='{git_path}' --work-tree='{git_path.parent}' checkout -- ."
+        cmd = (
+            f"git --git-dir='{git_path}'"
+            f" --work-tree='{git_path.parent}'"
+            ' checkout -- .'
+        )
         logger.debug("run: %r", cmd)
         proc = await asyncio.create_subprocess_shell(
             cmd,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
@@ -193,38 +202,36 @@ class GitDumper:
         self,
         session: aiohttp.ClientSession,
         download_url: str,
-        download_path: Path,
+        path: Path,
     ) -> None:
         response: aiohttp.ClientResponse
         async with session.get(download_url, allow_redirects=False) as response:
             response.raise_for_status()
             ct, _ = cgi.parse_header(response.headers.get('content-type', ''))
-            # При кодировании текста вырезаются, т.н. BAD CHARS, что делает невозможным
-            # gzip-декодирование git-объектов
+            # При кодировании текста вырезаются, т.н. BAD CHARS, что делает
+            # невозможным gzip-декодирование git-объектов
             if ct == 'text/html':
-                raise ValueError(f"content type: {ct} - {download_url}")
-            download_path.parent.mkdir(parents=True, exist_ok=True)
-            with download_path.open('wb') as fp:
+                raise ValueError(f"{ct} - {download_url}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('wb') as fp:
                 async for chunk in response.content.iter_chunked(8192):
                     fp.write(chunk)
 
         logger.info("downloaded: %s", download_url)
 
-    def sha12filename(self, sha1: str) -> str:
+    def get_object_filename(self, sha1: str) -> str:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
-    async def parse(
+    async def parse_file(
         self,
-        download_path: Path,
-        download_url: str,
-        download_queue: asyncio.Queue,
+        path: Path,
+        task_data: TaskData,
+        task_queue: asyncio.Queue,
     ) -> None:
-        git_url = download_url[: download_url.rfind('.git/') + len('.git/')]
-        _, filename = str(download_path).rsplit('.git/', 2)
-        if filename == 'index':
+        if task_data.filename == 'index':
             # https://git-scm.com/docs/index-format
             hashes = []
-            with download_path.open('rb') as fp:
+            with path.open('rb') as fp:
                 sig, ver, num_entries = read_struct(fp, '!4s2I')
                 assert sig == b'DIRC'
                 assert ver in (2, 3, 4)
@@ -247,44 +254,50 @@ class GitDumper:
                     fp.seek(entry_size % 8, io.SEEK_CUR)
                     num_entries -= 1
             for sha1 in hashes:
-                await download_queue.put(
-                    urljoin(git_url, self.sha12filename(sha1))
+                await task_queue.put(
+                    TaskData(task_data.git_url, self.get_object_filename(sha1))
                 )
-        elif filename == 'objects/info/packs':
+        elif task_data.filename == 'objects/info/packs':
             # Содержит строки вида "P <hex>.pack"
-            contents = download_path.read_text()
+            contents = path.read_text()
             for sha1 in SHA1_RE.findall(contents):
                 for ext in ('idx', 'pack'):
-                    await download_queue.put(
-                        urljoin(git_url, f'objects/pack/pack-{sha1}.{ext}')
+                    await task_queue.put(
+                        TaskData(
+                            task_data.git_url, f'objects/pack/pack-{sha1}.{ext}'
+                        )
                     )
         else:
             # https://stackoverflow.com/questions/16972031/how-to-unpack-all-objects-of-a-git-repository
-            if filename.startswith('objects/pack/pack-') and filename.endswith(
-                ('.pack', '.idx')
-            ):
-                logger.warn("How to unpack %s?", filename)
+            if task_data.filename.startswith(
+                'objects/pack/pack-'
+            ) and task_data.filename.endswith(('.pack', '.idx')):
                 return
 
-            if re.fullmatch(r'objects/[a-f\d]{2}/[a-f\d]{38}', filename):
+            if re.fullmatch(
+                r'objects/[a-f\d]{2}/[a-f\d]{38}', task_data.filename
+            ):
                 contents = await asyncio.get_event_loop().run_in_executor(
-                    self.executor, zlib.decompress, download_path.read_bytes()
+                    self.executor, zlib.decompress, path.read_bytes()
                 )
                 if contents.startswith(b'blob'):
-                    logger.debug("skip blob: %s", filename)
+                    logger.debug("skip blob: %s", path)
                     return
                 contents = contents.decode()
             else:
-                contents = download_path.read_text()
+                contents = path.read_text()
 
             for match in SHA1_OR_REF_RE.finditer(contents):
                 group = match.groupdict()
                 if group['sha1']:
-                    await download_queue.put(
-                        urljoin(git_url, self.sha12filename(group['sha1']))
+                    await task_queue.put(
+                        TaskData(
+                            task_data.git_url,
+                            self.get_object_filename(group['sha1']),
+                        )
                     )
                     continue
                 for prefix in ['', 'logs/']:
-                    await download_queue.put(
-                        urljoin(git_url, f"{prefix}{group['ref']}")
+                    await task_queue.put(
+                        TaskData(task_data.git_url, f"{prefix}{group['ref']}")
                     )
