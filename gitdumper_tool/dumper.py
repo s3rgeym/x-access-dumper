@@ -210,6 +210,7 @@ class GitDumper:
                             urljoin(git_url, f'{prefix}{ref}')
                         )
             case 'index':
+                # https://git-scm.com/docs/index-format
                 hashes = []
                 with download_path.open('rb') as fp:
                     sig, ver, num_entries = read_struct(fp, '!4s2I')
@@ -222,7 +223,7 @@ class GitDumper:
                         fp.seek(40, io.SEEK_CUR)  # file attrs
                         sha1 = fp.read(20).hex()
                         hashes.append(sha1)
-                        fp.seek(2, io.SEEK_CUR)  # file size
+                        fp.seek(2, io.SEEK_CUR)  # file flags
                         filename = b''
                         while (c := fp.read(1)) != b'\0':
                             assert c != b''  # Неожиданный конец
