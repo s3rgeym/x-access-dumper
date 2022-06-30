@@ -68,7 +68,7 @@ class GitDumper:
         #     ):
         #         setattr(self, field.name, field.default)
         self.executor = self.executor or ProcessPoolExecutor(
-            max_workers=os.cpu_count() * 2
+            max_workers=max((os.cpu_count() or 1) * 2, 4)
         )
         if isinstance(self.output_directory, str):
             self.output_directory = Path(self.output_directory)
