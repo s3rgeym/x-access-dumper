@@ -56,7 +56,7 @@ class GitDumper:
     def normalize_url(self, url: str) -> str:
         if '://' not in url:
             url = f'http://{url}'
-        for x in ['/', '/.git/']:
+        for x in ('/', '/.git/'):
             if not url.endswith(x):
                 url += x
         return url
@@ -180,6 +180,8 @@ class GitDumper:
         async with session.get(download_url, allow_redirects=False) as response:
             response.raise_for_status()
             ct, _ = cgi.parse_header(response.headers.get('content-type', ''))
+            # При кодировании текста вырезаются, т.н. BAD CHARS, что делает невозможным
+            # gzip-декодирование git-объектов
             if ct == 'text/html':
                 raise ValueError(f"bad content type ({ct}): {download_url}")
             download_path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,12 +225,13 @@ class GitDumper:
                         fp.seek(2, io.SEEK_CUR)  # file size
                         filename = b''
                         while (c := fp.read(1)) != b'\0':
-                            assert c != b''
+                            assert c != b''  # Неожиданный конец
                             filename += c
                         logger.debug(
                             "%s %s %s", git_url, sha1, filename.decode()
                         )
                         entry_size -= fp.tell()
+                        # Размер entry кратен 8 (добивается NULL-байтами)
                         fp.seek(entry_size % 8, io.SEEK_CUR)
                         num_entries -= 1
                 for sha1 in hashes:
