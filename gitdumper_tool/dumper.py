@@ -11,11 +11,11 @@ import zlib
 from collections import namedtuple
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
-from pathlib import Path
 from urllib.parse import TaskData, unquote, urljoin
 
 import aiohttp
 from aiohttp.typedefs import LooseHeaders
+from file_pathlib import Path
 
 from .logger import logger
 from .utils import read_struct
@@ -134,12 +134,12 @@ class GitDumper:
                     seen_urls.add(download_url)
 
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
-                    path = self.url2localpath(download_url)
+                    file_path = self.url2localpath(download_url)
 
-                    if self.override_existing or not path.exists():
+                    if self.override_existing or not file_path.exists():
                         try:
                             await self.download_file(
-                                session, download_url, path
+                                session, download_url, file_path
                             )
                         except Exception as e:
                             if isinstance(e, aiohttp.ClientResponseError):
@@ -151,14 +151,14 @@ class GitDumper:
                                 )
                             else:
                                 logger.error("error: %s", e)
-                            if path.exists():
-                                logger.debug("delete: %s", path)
-                                path.unlink()
+                            if file_path.exists():
+                                logger.debug("delete: %s", file_path)
+                                file_path.unlink()
                             continue
                     else:
-                        logger.debug("file exists: %s", path)
+                        logger.debug("file exists: %s", file_path)
 
-                    await self.parse_file(path, task_data, task_queue)
+                    await self.parse_file(file_path, task_data, task_queue)
                 except Exception as ex:
                     logger.error("an unexpected error has occurred: %s", ex)
                 finally:
@@ -202,7 +202,7 @@ class GitDumper:
         self,
         session: aiohttp.ClientSession,
         download_url: str,
-        path: Path,
+        file_path: Path,
     ) -> None:
         response: aiohttp.ClientResponse
         async with session.get(download_url, allow_redirects=False) as response:
@@ -212,8 +212,8 @@ class GitDumper:
             # невозможным gzip-декодирование git-объектов
             if ct == 'text/html':
                 raise ValueError(f"{ct} - {download_url}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open('wb') as fp:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with file_path.open('wb') as fp:
                 async for chunk in response.content.iter_chunked(8192):
                     fp.write(chunk)
 
@@ -224,14 +224,14 @@ class GitDumper:
 
     async def parse_file(
         self,
-        path: Path,
+        file_path: Path,
         task_data: TaskData,
         task_queue: asyncio.Queue,
     ) -> None:
         if task_data.filename == 'index':
             # https://git-scm.com/docs/index-format
             hashes = []
-            with path.open('rb') as fp:
+            with file_path.open('rb') as fp:
                 sig, ver, num_entries = read_struct(fp, '!4s2I')
                 assert sig == b'DIRC'
                 assert ver in (2, 3, 4)
@@ -259,7 +259,7 @@ class GitDumper:
                 )
         elif task_data.filename == 'objects/info/packs':
             # Содержит строки вида "P <hex>.pack"
-            contents = path.read_text()
+            contents = file_path.read_text()
             for sha1 in SHA1_RE.findall(contents):
                 for ext in ('idx', 'pack'):
                     await task_queue.put(
@@ -278,14 +278,14 @@ class GitDumper:
                 r'objects/[a-f\d]{2}/[a-f\d]{38}', task_data.filename
             ):
                 contents = await asyncio.get_event_loop().run_in_executor(
-                    self.executor, zlib.decompress, path.read_bytes()
+                    self.executor, zlib.decompress, file_path.read_bytes()
                 )
                 if contents.startswith(b'blob'):
-                    logger.debug("skip blob: %s", path)
+                    logger.debug("skip blob: %s", file_path)
                     return
                 contents = contents.decode()
             else:
-                contents = path.read_text()
+                contents = file_path.read_text()
 
             for match in SHA1_OR_REF_RE.finditer(contents):
                 group = match.groupdict()
