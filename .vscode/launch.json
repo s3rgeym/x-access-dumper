@@ -8,7 +8,7 @@
       "name": "Run X Access Dumper",
       "type": "python",
       "request": "launch",
-      "module": "xaccessdumper",
+      "module": "x_access_dumper",
       "justMyCode": true,
       "args": ["--override", "-vv", "https://trustcoinmining.com"],
       "autoReload": { "enable": true }
