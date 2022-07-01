@@ -1,4 +1,4 @@
-# X Accessible Dumper
+# X-Access-Dumper
 
 Dumps everything web accessible: `.git`, `.DS_Store`, sql dumps, backups...
 
