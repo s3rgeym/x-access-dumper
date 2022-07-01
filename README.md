@@ -1,30 +1,22 @@
-# Web Dumper
+# Web Accessible Dumper
 
-Web Dumper Tool.
-
-Features:
-
-- Mass Dumping.
-- Dump Git repo.
-- Parse `.gitignore`.
-- Parse `.DS_Store`.
-- Can download web accessible files (eg sql dumps and backups).
+Dumps everything web accessible: `.git`, `.DS_Store`, sql dumps, backups...
 
 Use asdf or pyenv to install latest python version.
 
 Install:
 
 ```bash
-$ pip install webdumper
-$ pipx install webdumper
+$ pip install x-access-dumper
+$ pipx install x-access-dumper
 ```
 
 Usage:
 
 ```
-$ webdumper -h
-$ webdumper url1 url2 url3
-$ webdumper < urls.txt
-$ command | webdumper
-$ webdumper url 2> err.log
+$ x-access-dumper -h
+$ x-access-dumper url1 url2 url3
+$ x-access-dumper < urls.txt
+$ command | x-access-dumper
+$ x-access-dumper -e '\.(png|jpe?g|gif)' -vv https://target 2> err.log
 ```
