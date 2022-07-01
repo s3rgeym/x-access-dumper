@@ -2,8 +2,6 @@
 
 Web Dumper Tool.
 
-Use asdf or pyenv to install latest python version.
-
 Features:
 
 - Mass Dumping.
@@ -11,6 +9,8 @@ Features:
 - Parse `.gitignore`.
 - Parse `.DS_Store`.
 - Can download web accessible files (eg sql dumps and backups).
+
+Use asdf or pyenv to install latest python version.
 
 Install:
 
