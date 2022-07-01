@@ -18,5 +18,5 @@ $ x-access-dumper -h
 $ x-access-dumper url1 url2 url3
 $ x-access-dumper < urls.txt
 $ command | x-access-dumper
-$ x-access-dumper -e '\.(png|jpe?g|gif)' -vv https://target 2> err.log
+$ x-access-dumper -e '\.(png|jpe?g|gif)$' -vv https://target 2> err.log
 ```
