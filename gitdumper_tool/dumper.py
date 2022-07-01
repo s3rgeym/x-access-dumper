@@ -1,15 +1,12 @@
 __all__ = ('GitDumper',)
 
 import asyncio
-import cgi
 import dataclasses
 import io
-import os
 import re
+import sys
 import typing
-import zlib
 from collections import namedtuple
-from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote, urljoin
@@ -46,7 +43,6 @@ TaskData = namedtuple('TaskData', 'git_url filename')
 @dataclasses.dataclass
 class GitDumper:
     _: dataclasses.KW_ONLY
-    executor: Executor | None = None
     headers: LooseHeaders | None = None
     num_workers: int = 50
     output_directory: str | Path = 'output'
@@ -60,16 +56,6 @@ class GitDumper:
     )
 
     def __post_init__(self) -> None:
-        # Если None, то восстановить дефолтное
-        # for field in dataclasses.fields(self):
-        #     if (
-        #         not isinstance(field.default, dataclasses._MISSING_TYPE)
-        #         and getattr(self, field.name) is None
-        #     ):
-        #         setattr(self, field.name, field.default)
-        # self.executor = self.executor or ProcessPoolExecutor(
-        #     max_workers=max((os.cpu_count() or 1) * 2, 4)
-        # )
         if isinstance(self.output_directory, str):
             self.output_directory = Path(self.output_directory)
         if not isinstance(self.timeout, aiohttp.ClientTimeout):
@@ -84,27 +70,27 @@ class GitDumper:
         return url
 
     async def run(self, urls: typing.Sequence[str]) -> None:
-        task_queue = asyncio.Queue()
+        queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
         for file in COMMON_FILES:
             for git_url in normalized_urls:
-                task_queue.put_nowait(TaskData(git_url, file))
+                queue.put_nowait(urljoin(git_url, file))
 
         # Посещенные ссылки
         seen_urls = set()
 
         # Запускаем задания в фоне
         workers = [
-            asyncio.create_task(self.worker(task_queue, seen_urls))
+            asyncio.create_task(self.worker(queue, seen_urls))
             for _ in range(self.num_workers)
         ]
 
         # Ждем пока очередь станет пустой
-        await task_queue.join()
+        await queue.join()
 
         # Останавливаем задания
         for _ in range(self.num_workers):
-            await task_queue.put(None)
+            await queue.put(None)
 
         for w in workers:
             await w
@@ -112,20 +98,14 @@ class GitDumper:
         for git_url in normalized_urls:
             await self.retrieve_source_code(self.url2localpath(git_url))
 
-    async def worker(
-        self, task_queue: asyncio.Queue, seen_urls: set[str]
-    ) -> None:
+    async def worker(self, queue: asyncio.Queue, seen_urls: set[str]) -> None:
         async with self.get_session() as session:
             while True:
                 try:
-                    task_data = await task_queue.get()
+                    download_url = await queue.get()
 
-                    if task_data is None:
+                    if download_url is None:
                         break
-
-                    download_url = urljoin(
-                        task_data.git_url, task_data.filename
-                    )
 
                     if download_url in seen_urls:
                         logger.debug("already seen %s", download_url)
@@ -158,16 +138,111 @@ class GitDumper:
                     else:
                         logger.debug("file exists: %s", file_path)
 
-                    await self.parse_file(file_path, task_data, task_queue)
+                    if (pos := download_url.rfind('.git/')) != -1:
+                        git_url = download_url[: pos + len('.git/')]
+                        await self.parse_git_file(file_path, git_url, queue)
+                    elif file_path.name == '.gitignore':
+                        await self.parse_gitignore(
+                            file_path, download_url, queue
+                        )
                 except Exception as ex:
                     logger.error("an unexpected error has occurred: %s", ex)
                 finally:
-                    task_queue.task_done()
+                    queue.task_done()
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
             unquote(download_url.split('://')[1])
         )
+
+    async def parse_git_file(
+        self,
+        file_path: Path,
+        git_url: str,
+        queue: asyncio.Queue,
+    ) -> None:
+        if file_path.name == 'index':
+            # https://git-scm.com/docs/index-format
+            hashes = []
+            filenames = []
+            with file_path.open('rb') as fp:
+                sig, ver, num_entries = read_struct(fp, '!4s2I')
+                assert sig == b'DIRC'
+                assert ver in (2, 3, 4)
+                assert num_entries > 0
+                logger.debug("num entries: %d", num_entries)
+                while num_entries:
+                    entry_size = fp.tell()
+                    fp.seek(40, io.SEEK_CUR)  # file attrs
+                    # 20 байт хеш, 2 байта флаги
+                    sha1 = fp.read(22)[:-2].hex()
+                    assert len(sha1) == 40
+                    hashes.append(sha1)
+                    filename = b''
+                    while (c := fp.read(1)) != b'\0':
+                        assert c != b''  # Неожиданный конец
+                        filename += c
+                    filename = filename.decode()
+                    filenames.append(filename)
+                    logger.debug("%s %s", sha1, filename)
+                    entry_size -= fp.tell()
+                    # Размер entry кратен 8 (добивается NULL-байтами)
+                    fp.seek(entry_size % 8, io.SEEK_CUR)
+                    num_entries -= 1
+            for sha1 in hashes:
+                await queue.put(
+                    urljoin(git_url, self.get_object_filename(sha1))
+                )
+            # Пробуем скачать файлы напрямую, если .git не получится
+            # восстановить, то, возможно, повезет с db.ini
+            for filename in filenames:
+                if self.is_web_accessable(filename):
+                    # /.git + file = /file
+                    await queue.put(urljoin(git_url[:-1], filename))
+
+        elif file_path.name == 'packs':
+            # Содержит строки вида "P <hex>.pack"
+            contents = file_path.read_text()
+            for sha1 in SHA1_RE.findall(contents):
+                for ext in ('idx', 'pack'):
+                    await queue.put(
+                        urljoin(git_url, f'objects/pack/pack-{sha1}.{ext}')
+                    )
+        elif not re.fullmatch(
+            r'(pack-)?[a-f\d]{38}(\.(idx|pack))?', file_path.name
+        ):
+            for match in SHA1_OR_REF_RE.finditer(file_path.read_text()):
+                group = match.groupdict()
+                if group['sha1']:
+                    await queue.put(
+                        urljoin(
+                            git_url,
+                            self.get_object_filename(group['sha1']),
+                        )
+                    )
+                    continue
+                for directory in ('', 'logs/'):
+                    await queue.put(
+                        urljoin(git_url, f"{directory}{group['ref']}")
+                    )
+
+    async def parse_gitignore(
+        self, file_path: Path, download_url: str, queue: asyncio.Queue
+    ) -> None:
+        filenames = []
+        with file_path.open('r') as fp:
+            for filename in fp:
+                filename = filename.split('#')[0].strip()
+                if not filename:
+                    continue
+                if any(c in filename for c in '*[]'):
+                    continue
+                if filename.startswith('/'):
+                    filename = filename[1:]
+                filenames.append(filename)
+        for filename in filenames:
+            if self.is_web_accessable(filename):
+                await queue.put(urljoin(download_url, filename))
 
     async def retrieve_source_code(self, git_path: Path) -> None:
         cmd = (
@@ -188,6 +263,21 @@ class GitDumper:
             logger.error(stderr.decode())
             logger.error("can't retrieve source: %s", git_path)
 
+    async def download_file(
+        self,
+        session: aiohttp.ClientSession,
+        download_url: str,
+        file_path: Path,
+    ) -> None:
+        response: aiohttp.ClientResponse
+        async with session.get(download_url, allow_redirects=False) as response:
+            response.raise_for_status()
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with file_path.open('wb') as fp:
+                async for chunk in response.content.iter_chunked(8192):
+                    fp.write(chunk)
+        logger.info("downloaded: %s", download_url)
+
     @asynccontextmanager
     async def get_session(self) -> typing.AsyncIterable[aiohttp.ClientSession]:
         async with aiohttp.ClientSession(
@@ -198,116 +288,10 @@ class GitDumper:
             session.headers.setdefault('User-Agent', self.user_agent)
             yield session
 
-    async def download_file(
-        self,
-        session: aiohttp.ClientSession,
-        download_url: str,
-        file_path: Path,
-    ) -> None:
-        response: aiohttp.ClientResponse
-        async with session.get(download_url, allow_redirects=False) as response:
-            response.raise_for_status()
-            ct, _ = cgi.parse_header(response.headers.get('content-type', ''))
-            # При кодировании текста вырезаются, т.н. BAD CHARS, что делает
-            # невозможным gzip-декодирование git-объектов
-            if ct == 'text/html':
-                raise ValueError(f"{ct} - {download_url}")
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            with file_path.open('wb') as fp:
-                async for chunk in response.content.iter_chunked(8192):
-                    fp.write(chunk)
-
-        logger.info("downloaded: %s", download_url)
-
     def get_object_filename(self, sha1: str) -> str:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
-    async def parse_file(
-        self,
-        file_path: Path,
-        task_data: TaskData,
-        task_queue: asyncio.Queue,
-    ) -> None:
-        if task_data.filename == 'index':
-            # https://git-scm.com/docs/index-format
-            hashes = []
-            with file_path.open('rb') as fp:
-                sig, ver, num_entries = read_struct(fp, '!4s2I')
-                assert sig == b'DIRC'
-                assert ver in (2, 3, 4)
-                assert num_entries > 0
-                logger.debug("num entries: %d", num_entries)
-                while num_entries:
-                    entry_size = fp.tell()
-                    fp.seek(40, io.SEEK_CUR)  # file attrs
-                    # 20 байт хеш, 2 байта флаги
-                    sha1 = fp.read(22)[:-2].hex()
-                    assert len(sha1) == 40
-                    hashes.append(sha1)
-                    filename = b''
-                    while (c := fp.read(1)) != b'\0':
-                        assert c != b''  # Неожиданный конец
-                        filename += c
-                    logger.debug(
-                        "%s %s%s", sha1, task_data.git_url, filename.decode()
-                    )
-                    entry_size -= fp.tell()
-                    # Размер entry кратен 8 (добивается NULL-байтами)
-                    fp.seek(entry_size % 8, io.SEEK_CUR)
-                    num_entries -= 1
-            for sha1 in hashes:
-                await task_queue.put(
-                    TaskData(task_data.git_url, self.get_object_filename(sha1))
-                )
-        elif task_data.filename == 'objects/info/packs':
-            # Содержит строки вида "P <hex>.pack"
-            contents = file_path.read_text()
-            for sha1 in SHA1_RE.findall(contents):
-                for ext in ('idx', 'pack'):
-                    await task_queue.put(
-                        TaskData(
-                            task_data.git_url, f'objects/pack/pack-{sha1}.{ext}'
-                        )
-                    )
-        else:
-            # https://stackoverflow.com/questions/16972031/how-to-unpack-all-objects-of-a-git-repository
-            if task_data.filename.startswith(
-                'objects/pack/pack-'
-            ) and task_data.filename.endswith(('.pack', '.idx')):
-                logger.debug("skip parsing: %s", file_path)
-                return
-
-            # Проверял свою дампилку в сравнении с другими на сайте trxchange.com
-            # $ find . -type f -name '*.php' | wc -l
-            # 109
-            # gitdumper.sh показывает тот же результат
-            # Так можно найти только файлы, которые были удалены из индекса, но почему-то остались на сервере
-            if re.fullmatch(
-                r'objects/[a-f\d]{2}/[a-f\d]{38}', task_data.filename
-            ):
-                logger.debug("skip parsing: %s", file_path)
-                return
-                contents = await asyncio.get_event_loop().run_in_executor(
-                    self.executor, zlib.decompress, file_path.read_bytes()
-                )
-                if contents.startswith(b'blob'):
-                    logger.debug("skip blob: %s", file_path)
-                    return
-                contents = contents.decode()
-            else:
-                contents = file_path.read_text()
-
-            for match in SHA1_OR_REF_RE.finditer(contents):
-                group = match.groupdict()
-                if group['sha1']:
-                    await task_queue.put(
-                        TaskData(
-                            task_data.git_url,
-                            self.get_object_filename(group['sha1']),
-                        )
-                    )
-                    continue
-                for prefix in ['', 'logs/']:
-                    await task_queue.put(
-                        TaskData(task_data.git_url, f"{prefix}{group['ref']}")
-                    )
+    def is_web_accessable(self, filename: str) -> bool:
+        return not filename.lower().endswith(
+            ('.php', '.php3', '.php4', '.php5', '.pl', '.jsp')
+        )
