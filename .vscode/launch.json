@@ -10,7 +10,7 @@
       "request": "launch",
       "module": "gitdumper_tool",
       "justMyCode": true,
-      "args": ["--override", "-vv", "https://kite.pl/"],
+      "args": ["--override", "-vv", "https://trustcoinmining.com"],
       "autoReload": { "enable": true }
     }
   ]
