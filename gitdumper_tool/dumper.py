@@ -31,8 +31,22 @@ COMMON_FILES = [
 
 SHA1_RE = re.compile(r'\b[a-f\d]{40}\b')
 REF_RE = re.compile(r'\brefs/\S+')
+
 SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
+)
+
+SCRIPT_EXTS = (
+    '.php',
+    '.php3',
+    '.php4',
+    '.php5',
+    '.php7',
+    '.pl',
+    '.jsp',
+    '.asp',
+    '.cgi',
+    '.exe',
 )
 
 
@@ -170,7 +184,8 @@ class GitDumper:
                 while num_entries:
                     entry_size = fp.tell()
                     fp.seek(40, io.SEEK_CUR)  # file attrs
-                    # 20 байт хеш, 2 байта флаги
+                    # 20 байт - хеш, 2 байта - флаги
+                    # имя файла может храниться в флагах, но не видел такого
                     sha1 = fp.read(22)[:-2].hex()
                     assert len(sha1) == 40
                     hashes.append(sha1)
@@ -184,6 +199,7 @@ class GitDumper:
                     entry_size -= fp.tell()
                     # Размер entry кратен 8 (добивается NULL-байтами)
                     fp.seek(entry_size % 8, io.SEEK_CUR)
+                    # Есть еще extensions, но они нигде не используются
                     num_entries -= 1
             for sha1 in hashes:
                 await queue.put(
@@ -231,11 +247,18 @@ class GitDumper:
                 filename = filename.split('#')[0].strip()
                 if not filename:
                     continue
+                # Паттерны вида: `*.py[co]`
                 if any(c in filename for c in '*[]'):
                     continue
                 if filename.startswith('/'):
                     filename = filename[1:]
-                filenames.append(filename)
+                # TODO: добавить больше кейсов
+                if filename.rstrip('/') == '.vscode':
+                    filenames.extend(
+                        ['.vscode/settings.json', '.vscode/launch.json']
+                    )
+                else:
+                    filenames.append(filename)
         for filename in filenames:
             if self.is_web_accessible(filename):
                 await queue.put(urljoin(download_url, filename))
@@ -288,6 +311,4 @@ class GitDumper:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
     def is_web_accessible(self, filename: str) -> bool:
-        return not filename.lower().endswith(
-            ('.php', '.php3', '.php4', '.php5', '.php7', '.pl', '.jsp', '.cgi')
-        )
+        return not filename.lower().endswith(SCRIPT_EXTS)
