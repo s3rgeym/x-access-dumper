@@ -5,10 +5,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "launch gidumper",
+      "name": "Run X Access Dumper",
       "type": "python",
       "request": "launch",
-      "module": "gitdumper_tool",
+      "module": "xaccessdumper",
       "justMyCode": true,
       "args": ["--override", "-vv", "https://trustcoinmining.com"],
       "autoReload": { "enable": true }
