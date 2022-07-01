@@ -1,6 +1,6 @@
 [tool.poetry]
-name = "XAccessDumper"
-version = "0.1.2"
+name = "x-access-dumper"
+version = "0.1.3"
 description = "Dumps everything web accessible: `.git`, `.DS_Store`, sql dumps, backups..."
 authors = ["tz4678 <tz4678@gmail.com>"]
 license = "MIT"
@@ -23,4 +23,4 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-x-access-dumper = "xaccessdumper.cli:main"
+x-access-dumper = "x_access_dumper.cli:main"
