@@ -15,12 +15,12 @@ from aiohttp.typedefs import LooseHeaders
 from .logger import logger
 from .utils import read_struct
 
-COMMON_FILES = [
+COMMON_GIT_FILES = [
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
     'HEAD',
     'ORIG_HEAD',
-    'config',
+    # 'config',
     'description',
     'index',
     'info/exclude',
@@ -74,17 +74,18 @@ class GitDumper:
     def normalize_url(self, url: str) -> str:
         if '://' not in url:
             url = f'http://{url}'
-        for x in ('/', '.git/'):
-            if not url.endswith(x):
-                url += x
+        if not url.endswith('/'):
+            url += '/'
         return url
 
     async def run(self, urls: typing.Sequence[str]) -> None:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
-        for file in COMMON_FILES:
-            for git_url in normalized_urls:
-                queue.put_nowait(urljoin(git_url, file))
+        
+        # Проверяем есть ли /.git/index
+        for git_url in normalized_urls:
+            queue.put_nowait(urljoin(git_url, '.git/index'))
+            queue.put_nowait(urljoin(git_url, '.DS_Store'))
 
         # Посещенные ссылки
         seen_urls = set()
@@ -201,6 +202,8 @@ class GitDumper:
                     fp.seek(entry_size % 8, io.SEEK_CUR)
                     # Есть еще extensions, но они нигде не используются
                     num_entries -= 1
+            for filename in COMMON_GIT_FILES:
+                await queue.put(urljoin(git_url, filename))
             for sha1 in hashes:
                 await queue.put(
                     urljoin(git_url, self.get_object_filename(sha1))
