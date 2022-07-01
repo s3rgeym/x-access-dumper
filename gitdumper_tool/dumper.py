@@ -289,5 +289,5 @@ class GitDumper:
 
     def is_web_accessable(self, filename: str) -> bool:
         return not filename.lower().endswith(
-            ('.php', '.php3', '.php4', '.php5', '.pl', '.jsp')
+            ('.php', '.php3', '.php4', '.php5', '.php7', '.pl', '.jsp', '.cgi')
         )
