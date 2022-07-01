@@ -192,7 +192,7 @@ class GitDumper:
             # Пробуем скачать файлы напрямую, если .git не получится
             # восстановить, то, возможно, повезет с db.ini
             for filename in filenames:
-                if self.is_web_accessable(filename):
+                if self.is_web_accessible(filename):
                     # /.git + file = /file
                     await queue.put(urljoin(git_url[:-1], filename))
 
@@ -237,7 +237,7 @@ class GitDumper:
                     filename = filename[1:]
                 filenames.append(filename)
         for filename in filenames:
-            if self.is_web_accessable(filename):
+            if self.is_web_accessible(filename):
                 await queue.put(urljoin(download_url, filename))
 
     async def retrieve_source_code(self, git_path: Path) -> None:
@@ -287,7 +287,7 @@ class GitDumper:
     def get_object_filename(self, sha1: str) -> str:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
-    def is_web_accessable(self, filename: str) -> bool:
+    def is_web_accessible(self, filename: str) -> bool:
         return not filename.lower().endswith(
             ('.php', '.php3', '.php4', '.php5', '.php7', '.pl', '.jsp', '.cgi')
         )
