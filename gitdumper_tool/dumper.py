@@ -4,9 +4,7 @@ import asyncio
 import dataclasses
 import io
 import re
-import sys
 import typing
-from collections import namedtuple
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote, urljoin
@@ -36,8 +34,6 @@ REF_RE = re.compile(r'\brefs/\S+')
 SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
 )
-
-TaskData = namedtuple('TaskData', 'git_url filename')
 
 
 @dataclasses.dataclass
