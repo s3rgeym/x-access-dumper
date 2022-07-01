@@ -12,7 +12,7 @@ from collections import namedtuple
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import TaskData, unquote, urljoin
+from urllib.parse import unquote, urljoin
 
 import aiohttp
 from aiohttp.typedefs import LooseHeaders
@@ -67,9 +67,9 @@ class GitDumper:
         #         and getattr(self, field.name) is None
         #     ):
         #         setattr(self, field.name, field.default)
-        self.executor = self.executor or ProcessPoolExecutor(
-            max_workers=max((os.cpu_count() or 1) * 2, 4)
-        )
+        # self.executor = self.executor or ProcessPoolExecutor(
+        #     max_workers=max((os.cpu_count() or 1) * 2, 4)
+        # )
         if isinstance(self.output_directory, str):
             self.output_directory = Path(self.output_directory)
         if not isinstance(self.timeout, aiohttp.ClientTimeout):
@@ -78,7 +78,7 @@ class GitDumper:
     def normalize_url(self, url: str) -> str:
         if '://' not in url:
             url = f'http://{url}'
-        for x in ('/', '/.git/'):
+        for x in ('/', '.git/'):
             if not url.endswith(x):
                 url += x
         return url
@@ -248,7 +248,9 @@ class GitDumper:
                     while (c := fp.read(1)) != b'\0':
                         assert c != b''  # Неожиданный конец
                         filename += c
-                    logger.debug("%s %s%s", sha1, git_url, filename.decode())
+                    logger.debug(
+                        "%s %s%s", sha1, task_data.git_url, filename.decode()
+                    )
                     entry_size -= fp.tell()
                     # Размер entry кратен 8 (добивается NULL-байтами)
                     fp.seek(entry_size % 8, io.SEEK_CUR)
@@ -272,11 +274,19 @@ class GitDumper:
             if task_data.filename.startswith(
                 'objects/pack/pack-'
             ) and task_data.filename.endswith(('.pack', '.idx')):
+                logger.debug("skip parsing: %s", file_path)
                 return
 
+            # Проверял свою дампилку в сравнении с другими на сайте trxchange.com
+            # $ find . -type f -name '*.php' | wc -l
+            # 109
+            # gitdumper.sh показывает тот же результат
+            # Так можно найти только файлы, которые были удалены из индекса, но почему-то остались на сервере
             if re.fullmatch(
                 r'objects/[a-f\d]{2}/[a-f\d]{38}', task_data.filename
             ):
+                logger.debug("skip parsing: %s", file_path)
+                return
                 contents = await asyncio.get_event_loop().run_in_executor(
                     self.executor, zlib.decompress, file_path.read_bytes()
                 )
