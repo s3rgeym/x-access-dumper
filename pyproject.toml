@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gitdumper-tool"
-version = "0.1.0"
+version = "0.1.1"
 description = "Git Dumper Tool"
 authors = ["s3rgeym <yamldeveloper@proton.me>"]
 license = "MIT"
