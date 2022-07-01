@@ -1,21 +1,25 @@
-__all__ = ('GitDumper',)
+# TODO: реализовать сканирование листинга файлов на сервере
+__all__ = ('XAccessDumper',)
 
 import asyncio
 import dataclasses
 import io
+import itertools
 import re
 import typing
 from contextlib import asynccontextmanager
+from os import access
 from pathlib import Path
-from urllib.parse import unquote, urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import aiohttp
 from aiohttp.typedefs import LooseHeaders
+from ds_store import DSStore, buddy
 
 from .logger import logger
 from .utils import read_struct
 
-COMMON_GIT_FILES = [
+COMMON_GIT_FILENAMES = [
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
     'HEAD',
@@ -49,10 +53,49 @@ SCRIPT_EXTS = (
     '.exe',
 )
 
+EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
+
+DOT_FILENAMES = (
+    '.bashrc',
+    '.zshrc',
+    '.bash_history',
+    '.zsh_history',
+    '.netrc',
+    '.ssh/id_rsa',
+    '.ssh/id_rsa.pub',
+    '.ssh/id_ed25519',
+    '.ssh/id_ed25519.pub',
+    # TODO: add more...
+)
+
+BACKUP_DIRS = ('', 'backup', 'backups', 'dump', 'dumps')
+
+BACKUP_NAMES = ('docroot', 'www', 'site', 'backup', '{host}')
+
+BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.tar.gz')
+
+SQL_DIRS = (*BACKUP_DIRS, 'sql', 'db', 'database')
+
+SQL_NAMES = ('dump', 'db', 'database')
+
+DEPLOY_DIRS = ('', 'docker', 'application', 'app', 'api')
+
+DEPLOY_FILENAMES = ('.env', 'prod.env', 'Dockerfile', 'docker-compose.yml')
+
+CONFIG_DIRS = ('', 'conf', 'config')
+
+CONFIG_NAMES = ('', 'conf', 'config', 'db', 'database')
+
+CONFIG_EXTS = ('.cfg', '.conf', '.ini')
+
+EDIT_FILENAMES = ('index.php', 'wp-config.php')
+EDIT_SUFFIXES = ('1', '~', '.bak')
+
 
 @dataclasses.dataclass
-class GitDumper:
+class XAccessDumper:
     _: dataclasses.KW_ONLY
+    exclude_pattern: re.Pattern | str | None = None
     headers: LooseHeaders | None = None
     num_workers: int = 50
     output_directory: str | Path = 'output'
@@ -66,6 +109,10 @@ class GitDumper:
     )
 
     def __post_init__(self) -> None:
+        if self.exclude_pattern and not isinstance(
+            self.exclude_pattern, re.Pattern
+        ):
+            self.exclude_pattern = re.compile(self.exclude_pattern)
         if isinstance(self.output_directory, str):
             self.output_directory = Path(self.output_directory)
         if not isinstance(self.timeout, aiohttp.ClientTimeout):
@@ -81,11 +128,37 @@ class GitDumper:
     async def run(self, urls: typing.Sequence[str]) -> None:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
-        
+
         # Проверяем есть ли /.git/index
-        for git_url in normalized_urls:
-            queue.put_nowait(urljoin(git_url, '.git/index'))
-            queue.put_nowait(urljoin(git_url, '.DS_Store'))
+        for url in normalized_urls:
+            queue.put_nowait(urljoin(url, '.git/index'))
+            queue.put_nowait(urljoin(url, '.DS_Store'))
+            for filename in DOT_FILENAMES:
+                queue.put_nowait(urljoin(url, filename))
+            host = urlparse(url).netloc
+            for dirname, name, ext in itertools.product(
+                BACKUP_DIRS, BACKUP_NAMES, BACKUP_EXTS
+            ):
+                filename = f'{dirname}/{name}{ext}'
+                filename = filename.format(host=host).lstrip('/')
+                queue.put_nowait(urljoin(url, filename))
+            for dirname, name in itertools.product(SQL_DIRS, SQL_NAMES):
+                filename = f'{dirname}/{name}.sql'
+                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+            for dirname, filename in itertools.product(
+                DEPLOY_DIRS, DEPLOY_FILENAMES
+            ):
+                filename = f'{dirname}/{filename}'
+                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+            for dirname, name, ext in itertools.product(
+                CONFIG_DIRS, CONFIG_NAMES, CONFIG_EXTS
+            ):
+                filename = f'{dirname}/{name}{ext}'
+                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+            for filename, suffix in itertools.product(
+                EDIT_FILENAMES, EDIT_SUFFIXES
+            ):
+                queue.put_nowait(urljoin(url, f'{filename}{suffix}'))
 
         # Посещенные ссылки
         seen_urls = set()
@@ -106,8 +179,8 @@ class GitDumper:
         for w in workers:
             await w
 
-        for git_url in normalized_urls:
-            await self.retrieve_source_code(self.url2localpath(git_url))
+        for url in normalized_urls:
+            await self.retrieve_source_code(self.url2localpath(url + '.git'))
 
     async def worker(self, queue: asyncio.Queue, seen_urls: set[str]) -> None:
         async with self.get_session() as session:
@@ -127,6 +200,12 @@ class GitDumper:
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
                     file_path = self.url2localpath(download_url)
 
+                    if self.exclude_pattern and self.exclude_pattern.search(
+                        file_path.name
+                    ):
+                        logger.debug("exclude file: %s", file_path)
+                        continue
+
                     if self.override_existing or not file_path.exists():
                         try:
                             await self.download_file(
@@ -134,7 +213,7 @@ class GitDumper:
                             )
                         except Exception as e:
                             if isinstance(e, aiohttp.ClientResponseError):
-                                logger.error(
+                                logger.warn(
                                     "%d: %s - %s",
                                     e.status,
                                     e.message,
@@ -148,8 +227,9 @@ class GitDumper:
                             continue
                     else:
                         logger.debug("file exists: %s", file_path)
-
-                    if (pos := download_url.rfind('.git/')) != -1:
+                    if file_path.name == '.DS_Store':
+                        await self.parse_ds_store(file_path, git_url, queue)
+                    elif (pos := download_url.rfind('.git/')) != -1:
                         git_url = download_url[: pos + len('.git/')]
                         await self.parse_git_file(file_path, git_url, queue)
                     elif file_path.name == '.gitignore':
@@ -161,10 +241,31 @@ class GitDumper:
                 finally:
                     queue.task_done()
 
-    def url2localpath(self, download_url: str) -> Path:
-        return self.output_directory.joinpath(
-            unquote(download_url.split('://')[1])
-        )
+    async def parse_ds_store(
+        self, file_path: Path, download_url: str, queue: asyncio.Queue
+    ) -> None:
+        with file_path.open('rb') as fp:
+            try:
+                # TODO: разобраться как определить тип файла
+                # https://wiki.mozilla.org/DS_Store_File_Format
+                filenames = set(entry.filename for entry in DSStore.open(fp))
+            except buddy.BuddyError:
+                logger.error("invalid format: %s", file_path)
+                file_path.unlink()
+                return
+        for filename in filenames:
+            if not self.is_web_accessible(filename):
+                continue
+            await queue.put(
+                urljoin(
+                    download_url,
+                    # Если файл выглядит как каталог проверяем есть ли в нем
+                    # .DS_Store
+                    filename
+                    if EXTENSION_RE.search(filename)
+                    else f'{filename}/.DS_Store',
+                )
+            )
 
     async def parse_git_file(
         self,
@@ -202,7 +303,7 @@ class GitDumper:
                     fp.seek(entry_size % 8, io.SEEK_CUR)
                     # Есть еще extensions, но они нигде не используются
                     num_entries -= 1
-            for filename in COMMON_GIT_FILES:
+            for filename in COMMON_GIT_FILENAMES:
                 await queue.put(urljoin(git_url, filename))
             for sha1 in hashes:
                 await queue.put(
@@ -315,3 +416,8 @@ class GitDumper:
 
     def is_web_accessible(self, filename: str) -> bool:
         return not filename.lower().endswith(SCRIPT_EXTS)
+
+    def url2localpath(self, download_url: str) -> Path:
+        return self.output_directory.joinpath(
+            unquote(download_url.split('://')[1])
+        )

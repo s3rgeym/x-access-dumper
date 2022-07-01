@@ -2,7 +2,7 @@ import argparse
 import sys
 import typing
 
-from .dumper import GitDumper
+from .dumper import XAccessDumper
 from .logger import logger
 from .utils import async_run
 
@@ -16,7 +16,7 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
         '-o',
         '--output',
         help="output directory",
-        default=GitDumper.output_directory,
+        default=XAccessDumper.output_directory,
     )
     parser.add_argument(
         '-H',
@@ -29,27 +29,33 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
         '-a',
         '--user-agent',
         help="client User-Agent",
-        default=GitDumper.user_agent,
+        default=XAccessDumper.user_agent,
+    )
+    parser.add_argument(
+        '-e',
+        '--exclude-pattern',
+        '--exclude',
+        help="pattern for exclude files, e.g. \"\\.(png|jpe?g|gif)$\"",
     )
     parser.add_argument(
         '--override',
         action='store_true',
         help="force override existing files",
-        default=GitDumper.override_existing,
+        default=XAccessDumper.override_existing,
     )
     parser.add_argument(
         '-t',
         '--timeout',
         help="client timeout",
         type=float,
-        default=GitDumper.timeout,
+        default=XAccessDumper.timeout,
     )
     parser.add_argument(
         '-w',
         '--num-workers',
         help="number of workers",
         type=int,
-        default=GitDumper.num_workers,
+        default=XAccessDumper.num_workers,
     )
     parser.add_argument(
         '-v',
@@ -75,7 +81,8 @@ async def main(argv: typing.Sequence | None = None) -> None:
                 if not line:
                     break
                 urls.append(line)
-        dumper = GitDumper(
+        dumper = XAccessDumper(
+            exclude_pattern=args.exclude_pattern,
             headers=args.header,
             num_workers=args.num_workers,
             override_existing=args.override,
