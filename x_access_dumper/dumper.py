@@ -18,6 +18,8 @@ from ds_store import DSStore, buddy
 from .logger import logger
 from .utils import read_struct
 
+OK = 200
+
 GIT_COMMON_FILENAMES = [
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
@@ -265,7 +267,7 @@ class XAccessDumper:
         filenames = []
         try:
             async with session.get(url, allow_redirects=False) as response:
-                response.raise_for_status()
+                assert response.status == OK
                 ct, _ = cgi.parse_header(response.headers['content-type'])
                 if ct != 'text/html':
                     raise ValueError(f"not text/html: {url}")
@@ -441,7 +443,7 @@ class XAccessDumper:
     ) -> None:
         response: aiohttp.ClientResponse
         async with session.get(download_url, allow_redirects=False) as response:
-            response.raise_for_status()
+            assert response.status == OK
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with file_path.open('wb') as fp:
                 async for chunk in response.content.iter_chunked(8192):
