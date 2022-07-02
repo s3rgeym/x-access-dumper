@@ -1,6 +1,6 @@
 # X-Access-Dumper
 
-Dumps everything web accessible: `.git`, `.DS_Store`, sql dumps, backups...
+Dumps everything web accessible: git repos, files from `.DS_Store`, sql dumps, backups and another found files
 
 Use asdf or pyenv to install latest python version.
 
@@ -18,5 +18,9 @@ $ x-access-dumper -h
 $ x-access-dumper url1 url2 url3
 $ x-access-dumper < urls.txt
 $ command | x-access-dumper
-$ x-access-dumper -e '\.(png|jpe?g|gif)$' -vv https://target 2> err.log
+$ x-access-dumper -vv https://target 2> log.txt
 ```
+
+# TODO:
+
+- exclude images and media files by default 
