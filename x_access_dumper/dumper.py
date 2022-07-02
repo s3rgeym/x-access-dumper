@@ -75,9 +75,9 @@ BACKUP_NAMES = ('docroot', 'htdocs', 'www', 'site', 'backup', '{host}')
 
 BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.gz')
 
-SQL_DIRS = (*BACKUP_DIRS, 'sql', 'db', 'database')
+DB_DUMP_DIRS = (*BACKUP_DIRS, 'sql', 'db', 'database')
 
-SQL_NAMES = ('dump', 'db', 'database')
+DB_DUMP_NAMES = ('dump', 'db', 'database')
 
 DEPLOY_DIRS = ('', 'docker', 'application', 'app', 'api')
 
@@ -98,7 +98,7 @@ EDIT_FILENAMES = ('index.php', 'wp-config.php', 'conf/db.php')
 EDIT_SUFFIXES = ('1', '~', '.bak', '.swp', '.old')
 
 LISTING_DIRS = tuple(
-    filter(None, (BACKUP_DIRS + SQL_DIRS + DEPLOY_DIRS + CONFIG_DIRS))
+    filter(None, (BACKUP_DIRS + DB_DUMP_DIRS + DEPLOY_DIRS + CONFIG_DIRS))
 )
 
 
@@ -135,43 +135,41 @@ class XAccessDumper:
             url += '/'
         return url
 
+    def gen_filenames(self) -> typing.Iterable[str]:
+        yield '.git/index'
+        yield '.DS_Store'
+        for filename in DOT_FILENAMES:
+            yield filename
+        for dirname in LISTING_DIRS:
+            yield dirname + '/'
+        for dirname, name, ext in itertools.product(
+            BACKUP_DIRS, BACKUP_NAMES, BACKUP_EXTS
+        ):
+            yield f'{dirname}/{name}{ext}'.lstrip('/')
+        for dirname, name in itertools.product(DB_DUMP_DIRS, DB_DUMP_NAMES):
+            yield f'{dirname}/{name}.sql'.lstrip('/')
+        for dirname, filename in itertools.product(
+            DEPLOY_DIRS, DEPLOY_FILENAMES
+        ):
+            yield f'{dirname}/{filename}'.lstrip('/')
+        for dirname, name, ext in itertools.product(
+            CONFIG_DIRS, CONFIG_NAMES, CONFIG_EXTS
+        ):
+            yield f'{dirname}/{name}{ext}'.lstrip('/')
+        for filename, suffix in itertools.product(
+            EDIT_FILENAMES, EDIT_SUFFIXES
+        ):
+            yield f'{filename}{suffix}'
+
     async def run(self, urls: typing.Sequence[str]) -> None:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
+        hosts = {x: urlparse(x).netloc for x in normalized_urls}
 
-        for url in normalized_urls:
-            # Проверяем есть ли /.git/index
-            queue.put_nowait(url + '.git/index')
-            # Петушки думают, что наличие гейбука делпает их программистами...
-            queue.put_nowait(url + '.DS_Store')
-            for filename in DOT_FILENAMES:
-                queue.put_nowait(url + filename)
-            for dirname in LISTING_DIRS:
-                queue.put_nowait(url + dirname + '/')
-            host = urlparse(url).netloc
-            for dirname, name, ext in itertools.product(
-                BACKUP_DIRS, BACKUP_NAMES, BACKUP_EXTS
-            ):
-                filename = f'{dirname}/{name}{ext}'
-                filename = filename.format(host=host)
-                queue.put_nowait(url + filename.lstrip('/'))
-            for dirname, name in itertools.product(SQL_DIRS, SQL_NAMES):
-                filename = f'{dirname}/{name}.sql'
-                queue.put_nowait(url + filename.lstrip('/'))
-            for dirname, filename in itertools.product(
-                DEPLOY_DIRS, DEPLOY_FILENAMES
-            ):
-                filename = f'{dirname}/{filename}'
-                queue.put_nowait(url + filename.lstrip('/'))
-            for dirname, name, ext in itertools.product(
-                CONFIG_DIRS, CONFIG_NAMES, CONFIG_EXTS
-            ):
-                filename = f'{dirname}/{name}{ext}'
-                queue.put_nowait(url + filename.lstrip('/'))
-            for filename, suffix in itertools.product(
-                EDIT_FILENAMES, EDIT_SUFFIXES
-            ):
-                queue.put_nowait(f'{url}{filename}{suffix}')
+        # чтобы домены чередовались при запросах
+        for filename in self.gen_filenames():
+            for url in normalized_urls:
+                queue.put_nowait(url + filename.format(host=hosts[url]))
 
         # Посещенные ссылки
         seen_urls = set()
