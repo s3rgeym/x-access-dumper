@@ -59,6 +59,7 @@ EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
 DOT_FILENAMES = (
     '.bashrc',
     '.zshrc',
+    '.zshenv',
     '.bash_history',
     '.zsh_history',
     '.netrc',
@@ -164,12 +165,12 @@ class XAccessDumper:
     async def run(self, urls: typing.Sequence[str]) -> None:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
-        hosts = {x: urlparse(x).netloc for x in normalized_urls}
+        url_hosts = {x: urlparse(x).netloc for x in normalized_urls}
 
         # чтобы домены чередовались при запросах
         for filename in self.gen_filenames():
             for url in normalized_urls:
-                queue.put_nowait(url + filename.format(host=hosts[url]))
+                queue.put_nowait(url + filename.format(host=url_hosts[url]))
 
         # Посещенные ссылки
         seen_urls = set()
@@ -238,7 +239,7 @@ class XAccessDumper:
                                 case asyncio.exceptions.TimeoutError():
                                     logger.warn("timeout: %s", url)
                                 case _:
-                                    logger.error("error: %s", e)
+                                    logger.error(e)
                             if file_path.exists():
                                 logger.debug("delete: %s", file_path)
                                 file_path.unlink()
@@ -265,7 +266,8 @@ class XAccessDumper:
         filenames = []
         try:
             async with session.get(url, allow_redirects=False) as response:
-                assert response.status == OK
+                if response.status != OK:
+                    raise ValueError(f"{response.status}: {url}")
                 ct, _ = cgi.parse_header(response.headers['content-type'])
                 if ct != 'text/html':
                     raise ValueError(f"not text/html: {url}")
@@ -441,7 +443,11 @@ class XAccessDumper:
     ) -> None:
         response: aiohttp.ClientResponse
         async with session.get(download_url, allow_redirects=False) as response:
-            assert response.status == OK
+            if response.status != OK:
+                raise ValueError(f"{response.status}: {download_url}")
+            ct, _ = cgi.parse_header(response.headers['content-type'])
+            if ct == 'text/html':
+                raise ValueError(f"text/html: {download_url}")
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with file_path.open('wb') as fp:
                 async for chunk in response.content.iter_chunked(8192):
