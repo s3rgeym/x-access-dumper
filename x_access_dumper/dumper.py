@@ -1,14 +1,13 @@
-# TODO: реализовать сканирование листинга файлов на сервере
 __all__ = ('XAccessDumper',)
 
 import asyncio
+import cgi
 import dataclasses
 import io
 import itertools
 import re
 import typing
 from contextlib import asynccontextmanager
-from os import access
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -19,7 +18,7 @@ from ds_store import DSStore, buddy
 from .logger import logger
 from .utils import read_struct
 
-COMMON_GIT_FILENAMES = [
+GIT_COMMON_FILENAMES = [
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
     'HEAD',
@@ -70,9 +69,9 @@ DOT_FILENAMES = (
 
 BACKUP_DIRS = ('', 'backup', 'backups', 'dump', 'dumps')
 
-BACKUP_NAMES = ('docroot', 'www', 'site', 'backup', '{host}')
+BACKUP_NAMES = ('docroot', 'htdocs', 'www', 'site', 'backup', '{host}')
 
-BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.tar.gz')
+BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.gz')
 
 SQL_DIRS = (*BACKUP_DIRS, 'sql', 'db', 'database')
 
@@ -80,7 +79,12 @@ SQL_NAMES = ('dump', 'db', 'database')
 
 DEPLOY_DIRS = ('', 'docker', 'application', 'app', 'api')
 
-DEPLOY_FILENAMES = ('.env', 'prod.env', 'Dockerfile', 'docker-compose.yml')
+DEPLOY_FILENAMES = (
+    '.env',
+    'prod.env',
+    'Dockerfile',
+    'docker-compose.yml',
+)
 
 CONFIG_DIRS = ('', 'conf', 'config')
 
@@ -89,7 +93,11 @@ CONFIG_NAMES = ('conf', 'config', 'db', 'database')
 CONFIG_EXTS = ('.cfg', '.conf', '.ini')
 
 EDIT_FILENAMES = ('index.php', 'wp-config.php', 'conf/db.php')
-EDIT_SUFFIXES = ('1', '~', '.bak')
+EDIT_SUFFIXES = ('1', '~', '.bak', '.swp', '.old')
+
+LISTING_DIRS = tuple(
+    filter(None, (BACKUP_DIRS + SQL_DIRS + DEPLOY_DIRS + CONFIG_DIRS))
+)
 
 
 @dataclasses.dataclass
@@ -129,36 +137,39 @@ class XAccessDumper:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
 
-        # Проверяем есть ли /.git/index
         for url in normalized_urls:
-            queue.put_nowait(urljoin(url, '.git/index'))
-            queue.put_nowait(urljoin(url, '.DS_Store'))
+            # Проверяем есть ли /.git/index
+            queue.put_nowait(url + '.git/index')
+            # Петушки думают, что наличие гейбука делпает их программистами...
+            queue.put_nowait(url + '.DS_Store')
             for filename in DOT_FILENAMES:
-                queue.put_nowait(urljoin(url, filename))
+                queue.put_nowait(url + filename)
+            for dirname in LISTING_DIRS:
+                queue.put_nowait(url + dirname + '/')
             host = urlparse(url).netloc
             for dirname, name, ext in itertools.product(
                 BACKUP_DIRS, BACKUP_NAMES, BACKUP_EXTS
             ):
                 filename = f'{dirname}/{name}{ext}'
-                filename = filename.format(host=host).lstrip('/')
-                queue.put_nowait(urljoin(url, filename))
+                filename = filename.format(host=host)
+                queue.put_nowait(url + filename.lstrip('/'))
             for dirname, name in itertools.product(SQL_DIRS, SQL_NAMES):
                 filename = f'{dirname}/{name}.sql'
-                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+                queue.put_nowait(url + filename.lstrip('/'))
             for dirname, filename in itertools.product(
                 DEPLOY_DIRS, DEPLOY_FILENAMES
             ):
                 filename = f'{dirname}/{filename}'
-                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+                queue.put_nowait(url + filename.lstrip('/'))
             for dirname, name, ext in itertools.product(
                 CONFIG_DIRS, CONFIG_NAMES, CONFIG_EXTS
             ):
                 filename = f'{dirname}/{name}{ext}'
-                queue.put_nowait(urljoin(url, filename.lstrip('/')))
+                queue.put_nowait(url + filename.lstrip('/'))
             for filename, suffix in itertools.product(
                 EDIT_FILENAMES, EDIT_SUFFIXES
             ):
-                queue.put_nowait(urljoin(url, f'{filename}{suffix}'))
+                queue.put_nowait(f'{url}{filename}{suffix}')
 
         # Посещенные ссылки
         seen_urls = set()
@@ -180,25 +191,31 @@ class XAccessDumper:
             await w
 
         for url in normalized_urls:
-            await self.retrieve_source_code(self.url2localpath(url + '.git'))
+            git_path = self.url2localpath(url + '.git')
+            if git_path.exists():
+                await self.retrieve_source_code(git_path)
 
     async def worker(self, queue: asyncio.Queue, seen_urls: set[str]) -> None:
         async with self.get_session() as session:
             while True:
                 try:
-                    download_url = await queue.get()
+                    url = await queue.get()
 
-                    if download_url is None:
+                    if url is None:
                         break
 
-                    if download_url in seen_urls:
-                        logger.debug("already seen %s", download_url)
+                    if url in seen_urls:
+                        logger.debug("already seen %s", url)
                         continue
 
-                    seen_urls.add(download_url)
+                    seen_urls.add(url)
+
+                    if url.endswith('/'):
+                        await self.parse_directory_listing(session, url, queue)
+                        continue
 
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
-                    file_path = self.url2localpath(download_url)
+                    file_path = self.url2localpath(url)
 
                     if self.exclude_pattern and self.exclude_pattern.search(
                         file_path.name
@@ -208,19 +225,20 @@ class XAccessDumper:
 
                     if self.override_existing or not file_path.exists():
                         try:
-                            await self.download_file(
-                                session, download_url, file_path
-                            )
+                            await self.download_file(session, url, file_path)
                         except Exception as e:
-                            if isinstance(e, aiohttp.ClientResponseError):
-                                logger.warn(
-                                    "%d: %s - %s",
-                                    e.status,
-                                    e.message,
-                                    e.request_info.url,
-                                )
-                            else:
-                                logger.error("error: %s", e)
+                            match e:
+                                case aiohttp.ClientResponseError():
+                                    logger.warn(
+                                        "%d: %s - %s",
+                                        e.status,
+                                        e.message,
+                                        e.request_info.url,
+                                    )
+                                case asyncio.exceptions.TimeoutError():
+                                    logger.warn("timeout: %s", url)
+                                case _:
+                                    logger.error("error: %s", e)
                             if file_path.exists():
                                 logger.debug("delete: %s", file_path)
                                 file_path.unlink()
@@ -228,18 +246,47 @@ class XAccessDumper:
                     else:
                         logger.debug("file exists: %s", file_path)
                     if file_path.name == '.DS_Store':
-                        await self.parse_ds_store(file_path, git_url, queue)
-                    elif (pos := download_url.rfind('.git/')) != -1:
-                        git_url = download_url[: pos + len('.git/')]
-                        await self.parse_git_file(file_path, git_url, queue)
-                    elif file_path.name == '.gitignore':
-                        await self.parse_gitignore(
-                            file_path, download_url, queue
+                        await self.parse_ds_store(file_path, url, queue)
+                    elif (pos := url.rfind('.git/')) != -1:
+                        await self.parse_git_file(
+                            file_path, url[: pos + len('.git/')], queue
                         )
+                    elif file_path.name == '.gitignore':
+                        await self.parse_gitignore(file_path, url, queue)
                 except Exception as ex:
                     logger.error("an unexpected error has occurred: %s", ex)
                 finally:
                     queue.task_done()
+
+    async def parse_directory_listing(
+        self, session: aiohttp.ClientSession, url: str, queue: asyncio.Queue
+    ) -> None:
+        response: aiohttp.ClientResponse
+        filenames = []
+        try:
+            async with session.get(url, allow_redirects=False) as response:
+                response.raise_for_status()
+                ct, _ = cgi.parse_header(response.headers['content-type'])
+                if ct != 'text/html':
+                    raise ValueError(f"not text/html: {url}")
+                html = await response.text()
+                if '<title>Index of /' not in html:
+                    raise ValueError(f"not directory listing: {url}")
+                for filename in re.findall(r'<a href="([^"]+)', html):
+                    # <a href="?C=N;O=D">Name</a>
+                    # <a href="/">Parent Directory</a>
+                    if not filename.startswith(('/', '?')):
+                        filenames.append(filename)
+        except (aiohttp.ClientResponseError, aiohttp.ServerTimeoutError):
+            logger.warning("request failed: %s", url)
+            return
+        # закрыли соединение
+        for filename in filenames:
+            if not self.is_web_accessible(filename):
+                continue
+            # <a href="backup.zip">
+            # <a href="plugins/">
+            await queue.put(url + filename)
 
     async def parse_ds_store(
         self, file_path: Path, download_url: str, queue: asyncio.Queue
@@ -256,16 +303,18 @@ class XAccessDumper:
         for filename in filenames:
             if not self.is_web_accessible(filename):
                 continue
+            is_dir = not EXTENSION_RE.search(filename)
             await queue.put(
                 urljoin(
                     download_url,
                     # Если файл выглядит как каталог проверяем есть ли в нем
                     # .DS_Store
-                    filename
-                    if EXTENSION_RE.search(filename)
-                    else f'{filename}/.DS_Store',
+                    filename + ['', '/.DS_Store'][is_dir],
                 )
             )
+            # Проверяем листинг
+            # if is_dir:
+            #     await queue.put(urljoin(download_url, filename + '/'))
 
     async def parse_git_file(
         self,
@@ -303,12 +352,10 @@ class XAccessDumper:
                     fp.seek(entry_size % 8, io.SEEK_CUR)
                     # Есть еще extensions, но они нигде не используются
                     num_entries -= 1
-            for filename in COMMON_GIT_FILENAMES:
-                await queue.put(urljoin(git_url, filename))
+            for filename in GIT_COMMON_FILENAMES:
+                await queue.put(git_url + filename)
             for sha1 in hashes:
-                await queue.put(
-                    urljoin(git_url, self.get_object_filename(sha1))
-                )
+                await queue.put(git_url + self.hash2filename(sha1))
             # Пробуем скачать файлы напрямую, если .git не получится
             # восстановить, то, возможно, повезет с db.ini
             for filename in filenames:
@@ -333,7 +380,7 @@ class XAccessDumper:
                     await queue.put(
                         urljoin(
                             git_url,
-                            self.get_object_filename(group['sha1']),
+                            self.hash2filename(group['sha1']),
                         )
                     )
                     continue
@@ -411,7 +458,7 @@ class XAccessDumper:
             session.headers.setdefault('User-Agent', self.user_agent)
             yield session
 
-    def get_object_filename(self, sha1: str) -> str:
+    def hash2filename(self, sha1: str) -> str:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
     def is_web_accessible(self, filename: str) -> bool:

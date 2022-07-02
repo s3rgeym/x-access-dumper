@@ -10,7 +10,7 @@
       "request": "launch",
       "module": "x_access_dumper",
       "justMyCode": true,
-      "args": ["--override", "-vv", "https://trustcoinmining.com"],
+      "args": ["--override", "-vv", "https://haydays.com/"],
       "autoReload": { "enable": true }
     }
   ]
