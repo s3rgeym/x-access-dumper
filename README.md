@@ -1,6 +1,6 @@
 # X-Access-Dumper
 
-Dumps everything web accessible: git repos, files from `.DS_Store`, sql dumps, backups and another found files
+Dumps everything web accessible: git repos, files from `.DS_Store`, sql dumps, backups, configs...
 
 Use asdf or pyenv to install latest python version.
 
