@@ -10,7 +10,7 @@
       "request": "launch",
       "module": "x_access_dumper",
       "justMyCode": true,
-      "args": ["--override", "-vv", "https://haydays.com/"],
+      "args": ["--override", "-vv", "<", "urls.txt"],
       "autoReload": { "enable": true }
     }
   ]
