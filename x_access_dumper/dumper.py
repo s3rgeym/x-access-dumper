@@ -20,19 +20,18 @@ from .utils import read_struct
 
 OK = 200
 
-GIT_COMMON_FILENAMES = [
+GIT_COMMON_FILENAMES = (
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
     'HEAD',
     'ORIG_HEAD',
-    # 'config',
+    'config',
     'description',
-    'index',
     'info/exclude',
     'logs/HEAD',
     'objects/info/packs',
     'packed-refs',
-]
+)
 
 SHA1_RE = re.compile(r'\b[a-f\d]{40}\b')
 REF_RE = re.compile(r'\brefs/\S+')
@@ -70,13 +69,13 @@ DOT_FILENAMES = (
     # TODO: add more...
 )
 
-BACKUP_DIRS = ('', 'backup', 'backups', 'dump', 'dumps')
+BACKUP_DIRS = ('', 'backup', 'backups')
 
 BACKUP_NAMES = ('docroot', 'htdocs', 'www', 'site', 'backup', '{host}')
 
 BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.gz')
 
-DB_DUMP_DIRS = (*BACKUP_DIRS, 'sql', 'db', 'database')
+DB_DUMP_DIRS = ('', 'dump', 'dumps', 'sql', 'db', 'database')
 
 DB_DUMP_NAMES = ('dump', 'db', 'database')
 
