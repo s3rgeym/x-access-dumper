@@ -5,6 +5,7 @@ __pycache__
 /.venv
 /dist
 /output
+/output.old
 /err.log
 /urls.txt
 /*.dump.sql
