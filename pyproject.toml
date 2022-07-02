@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "x-access-dumper"
-version = "0.1.4"
+version = "0.1.5"
 description = "Dumps everything web accessible: `.git`, `.DS_Store`, sql dumps, backups..."
 authors = ["s3rgeym <yamldeveloper@proton.me>"]
 license = "MIT"
