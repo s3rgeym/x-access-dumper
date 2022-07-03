@@ -76,10 +76,6 @@ EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
 
 DB_CONFIGS = tuple(make_strings(('', 'conf/', 'config/'), ('db', 'database')))
 
-PHP_FILES = tuple(
-    make_strings(('index', 'wp-config', 'settings', *DB_CONFIGS), ('.php',))
-)
-
 CHECK_FILES = (
     '.git/index',
     '.DS_Store',
@@ -112,9 +108,13 @@ CHECK_FILES = (
     # .swp файлы создает vim, они содержат точку в начале имени
     *map(
         lambda s: re.sub(r'([^/]+\.swp)$', r'.\1', s),
-        make_strings(PHP_FILES, ('1', '~', '.bak', '.swp')),
+        make_strings(
+            ('index', 'wp-config', 'settings', *DB_CONFIGS), 
+            ('.php',), 
+            ('1', '~', '.bak', '.swp'),
+        ),
     ),
-    # Проверяем каталоги на листин
+    # Проверяем каталоги на листинг
     *make_strings(('dump', 'backup'), ('', 's'), ('/',)),
     # TODO: add more...
 )
