@@ -11,7 +11,7 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument('url', nargs='*', help="git url")
+    parser.add_argument('url', nargs='*', help="url or urls")
     parser.add_argument(
         '-o',
         '--output',
@@ -35,7 +35,7 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
         '-e',
         '--exclude-pattern',
         '--exclude',
-        help="pattern for exclude files, e.g. \"\\.(png|jpe?g|gif)$\"",
+        help="pattern for exclude files, e.g. \"\\.(ext1|ext2|ext3)$\"",
     )
     parser.add_argument(
         '--override',
@@ -68,7 +68,7 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
 
 
 @async_run
-async def main(argv: typing.Sequence | None = None) -> None:
+async def main(argv: typing.Sequence | None = None) -> int | None:
     try:
         args = _parse_args(argv)
         levels = ['WARNING', 'INFO', 'DEBUG']
@@ -92,4 +92,4 @@ async def main(argv: typing.Sequence | None = None) -> None:
         await dumper.run(urls)
     except Exception as ex:
         logger.critical(ex)
-        sys.exit(1)
+        return 1
