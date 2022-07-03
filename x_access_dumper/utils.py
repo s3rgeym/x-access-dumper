@@ -19,7 +19,7 @@ def read_struct(fp: typing.BinaryIO, format: str) -> tuple[typing.Any, ...]:
     return struct.unpack(format, fp.read(struct.calcsize(format)))
 
 
-# TODO: cделать по красоте
+# TODO: неудачное название
 def make_strings(*args: typing.Any) -> typing.Iterable[str]:
     """
     >>> list(make_strings(('', 'dir/'), ('file1', 'file2', 'file3'), ('.ext1', '.ext2')))
