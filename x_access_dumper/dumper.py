@@ -1,7 +1,6 @@
 __all__ = ('XAccessDumper',)
 
 import asyncio
-import cgi
 import dataclasses
 import io
 import itertools
@@ -15,12 +14,16 @@ import aiohttp
 from aiohttp.typedefs import LooseHeaders
 from ds_store import DSStore, buddy
 
+from . import errors
 from .logger import logger
-from .utils import read_struct
+from .utils import gen_files, read_struct
+from .wrappers import ResponseWrapper
 
-OK = 200
+HTTP_OK = 200
 
-GIT_COMMON_FILENAMES = (
+GIT_DIR = '.git/'
+
+CHECK_GIT_FILES = (
     'COMMIT_EDITMSG',
     'FETCH_HEAD',
     'HEAD',
@@ -53,52 +56,67 @@ SCRIPT_EXTS = (
     '.exe',
 )
 
+MEDIA_EXTS = (
+    '.avi',
+    '.gif',
+    '.jpe',
+    '.jpeg',
+    '.jpg',
+    '.mp3',
+    '.mp4',
+    '.ogg',
+    '.png',
+    '.psd',
+    '.webp',
+)
+
+HTML_EXTS = ('.htm', '.html')
+
 EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
 
-DOT_FILENAMES = (
-    '.bashrc',
-    '.zshrc',
-    '.zshenv',
-    '.bash_history',
-    '.zsh_history',
-    '.netrc',
-    '.ssh/id_rsa',
-    '.ssh/id_rsa.pub',
-    '.ssh/id_ed25519',
-    '.ssh/id_ed25519.pub',
-    # TODO: add more...
+DB_CONFIGS = tuple(gen_files(('', 'conf/', 'config/'), ('db', 'database')))
+
+PHP_FILES = tuple(
+    gen_files(('index', 'wp-config', 'settings', *DB_CONFIGS), ('.php',))
 )
 
-BACKUP_DIRS = ('', 'backup', 'backups')
-
-BACKUP_NAMES = ('docroot', 'htdocs', 'www', 'site', 'backup', '{host}')
-
-BACKUP_EXTS = ('.zip', '.tar.gz', '.tgz', '.tar', '.gz')
-
-DB_DUMP_DIRS = ('', 'dump', 'dumps', 'sql', 'db', 'database')
-
-DB_DUMP_NAMES = ('dump', 'db', 'database')
-
-DEPLOY_DIRS = ('', 'docker', 'application', 'app', 'api')
-
-DEPLOY_FILENAMES = (
-    '.env',
-    'prod.env',
+CHECK_FILES = (
+    '.git/index',
+    '.DS_Store',
+    # dotfiles
+    '.profile',
+    '.zshenv',
+    *gen_files(('.bash', '.zsh'), ('rc', '_history')),
+    # хранятся пароли от сайтов
+    '.netrc',
+    # часто ключи ssh без пароля
+    *gen_files(('.ssh/',), ('id_rsa', 'id_ed25519'), ('', '.pub')),
+    # бекапы в корне сайта
+    *gen_files(
+        ('www', '{host}', 'docroot', 'htdocs', 'site', 'backup'),
+        ('.zip', '.tar.gz', '.tgz', '.tar', '.gz'),
+    ),
+    # дампы в корне
+    *gen_files(
+        ('dump', 'database', 'db'),
+        ('.sql',),
+    ),
+    # докер
     'Dockerfile',
     'docker-compose.yml',
-)
-
-CONFIG_DIRS = ('', 'conf', 'config')
-
-CONFIG_NAMES = ('conf', 'config', 'db', 'database')
-
-CONFIG_EXTS = ('.cfg', '.conf', '.ini')
-
-EDIT_FILENAMES = ('index.php', 'wp-config.php', 'conf/db.php')
-EDIT_SUFFIXES = ('1', '~', '.bak', '.swp', '.old')
-
-LISTING_DIRS = tuple(
-    filter(None, (BACKUP_DIRS + DB_DUMP_DIRS + DEPLOY_DIRS + CONFIG_DIRS))
+    '.env',
+    'prod.env',
+    # конфиги
+    *gen_files(DB_CONFIGS, ('.ini', '.conf', '.cfg')),
+    # копии php файлов
+    # .swp файлы создает vim, они содержат точку в начале имени
+    *map(
+        lambda s: re.sub(r'([^/]+\.swp)$', r'.\1', s),
+        gen_files(PHP_FILES, ('1', '~', '.bak', '.swp')),
+    ),
+    # Проверяем каталоги на листин
+    *gen_files(('dump', 'backup'), ('', 's'), ('/',)),
+    # TODO: add more...
 )
 
 
@@ -135,39 +153,13 @@ class XAccessDumper:
             url += '/'
         return url
 
-    def gen_filenames(self) -> typing.Iterable[str]:
-        yield '.git/index'
-        yield '.DS_Store'
-        for filename in DOT_FILENAMES:
-            yield filename
-        for dirname in LISTING_DIRS:
-            yield dirname + '/'
-        for dirname, name, ext in itertools.product(
-            BACKUP_DIRS, BACKUP_NAMES, BACKUP_EXTS
-        ):
-            yield f'{dirname}/{name}{ext}'.lstrip('/')
-        for dirname, name in itertools.product(DB_DUMP_DIRS, DB_DUMP_NAMES):
-            yield f'{dirname}/{name}.sql'.lstrip('/')
-        for dirname, filename in itertools.product(
-            DEPLOY_DIRS, DEPLOY_FILENAMES
-        ):
-            yield f'{dirname}/{filename}'.lstrip('/')
-        for dirname, name, ext in itertools.product(
-            CONFIG_DIRS, CONFIG_NAMES, CONFIG_EXTS
-        ):
-            yield f'{dirname}/{name}{ext}'.lstrip('/')
-        for filename, suffix in itertools.product(
-            EDIT_FILENAMES, EDIT_SUFFIXES
-        ):
-            yield f'{filename}{suffix}'
-
     async def run(self, urls: typing.Sequence[str]) -> None:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
         url_hosts = {x: urlparse(x).netloc for x in normalized_urls}
 
         # чтобы домены чередовались при запросах
-        for filename in self.gen_filenames():
+        for filename in CHECK_FILES:
             for url in normalized_urls:
                 queue.put_nowait(url + filename.format(host=url_hosts[url]))
 
@@ -191,7 +183,7 @@ class XAccessDumper:
             await w
 
         for url in normalized_urls:
-            git_path = self.url2localpath(url + '.git')
+            git_path = self.url2localpath(url + GIT_DIR)
             if git_path.exists():
                 await self.retrieve_source_code(git_path)
 
@@ -200,122 +192,92 @@ class XAccessDumper:
             while True:
                 try:
                     url = await queue.get()
-
                     if url is None:
                         break
-
                     if url in seen_urls:
                         logger.debug("already seen %s", url)
                         continue
-
                     seen_urls.add(url)
-
                     if url.endswith('/'):
                         await self.parse_directory_listing(session, url, queue)
                         continue
-
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
                     file_path = self.url2localpath(url)
-
                     if self.exclude_pattern and self.exclude_pattern.search(
                         file_path.name
                     ):
                         logger.debug("exclude file: %s", file_path)
                         continue
-
                     if self.override_existing or not file_path.exists():
-                        try:
-                            await self.download_file(session, url, file_path)
-                        except Exception as e:
-                            match e:
-                                case aiohttp.ClientResponseError():
-                                    logger.warn(
-                                        "%d: %s - %s",
-                                        e.status,
-                                        e.message,
-                                        e.request_info.url,
-                                    )
-                                case asyncio.exceptions.TimeoutError():
-                                    logger.warn("timeout: %s", url)
-                                case _:
-                                    logger.error(e)
-                            if file_path.exists():
-                                logger.debug("delete: %s", file_path)
-                                file_path.unlink()
-                            continue
+                        await self.download_file(session, url, file_path)
+                        logger.info("downloaded: %s", url)
                     else:
                         logger.debug("file exists: %s", file_path)
                     if file_path.name == '.DS_Store':
-                        await self.parse_ds_store(file_path, url, queue)
-                    elif (pos := url.rfind('.git/')) != -1:
+                        await self.parse_ds_store(
+                            file_path, urljoin(url, '.'), queue
+                        )
+                    elif (pos := url.rfind(GIT_DIR)) != -1:
                         await self.parse_git_file(
-                            file_path, url[: pos + len('.git/')], queue
+                            file_path, url[: pos + len(GIT_DIR)], queue
                         )
                     elif file_path.name == '.gitignore':
                         await self.parse_gitignore(file_path, url, queue)
-                except Exception as ex:
-                    logger.error("an unexpected error has occurred: %s", ex)
+                except errors.Error as e:
+                    logger.warn(e)
+                except Exception as e:
+                    logger.exception(e)
                 finally:
                     queue.task_done()
 
     async def parse_directory_listing(
         self, session: aiohttp.ClientSession, url: str, queue: asyncio.Queue
     ) -> None:
-        response: aiohttp.ClientResponse
+        response: ResponseWrapper
         filenames = []
-        try:
-            async with session.get(url, allow_redirects=False) as response:
-                if response.status != OK:
-                    raise ValueError(f"{response.status}: {url}")
-                ct, _ = cgi.parse_header(response.headers['content-type'])
-                if ct != 'text/html':
-                    raise ValueError(f"not text/html: {url}")
-                html = await response.text()
-                if '<title>Index of /' not in html:
-                    raise ValueError(f"not directory listing: {url}")
-                for filename in re.findall(r'<a href="([^"]+)', html):
-                    # <a href="?C=N;O=D">Name</a>
-                    # <a href="/">Parent Directory</a>
-                    if not filename.startswith(('/', '?')):
-                        filenames.append(filename)
-        except (aiohttp.ClientResponseError, aiohttp.ServerTimeoutError):
-            logger.warning("request failed: %s", url)
-            return
+        async with self.fetch(session, url) as response:
+            if response.content_type != 'text/html':
+                raise errors.Error(f"response is not text/html: {url}")
+            html = await response.text()
+            if '<title>Index of /' not in html:
+                raise errors.Error(f"response is not server listing: {url}")
+            for filename in re.findall(r'<a href="([^"]+)', html):
+                # <a href="?C=N;O=D">Name</a>
+                # <a href="/">Parent Directory</a>
+                if not filename.startswith('/') and '?' not in filename:
+                    filenames.append(filename)
         # закрыли соединение
         for filename in filenames:
-            if not self.is_web_accessible(filename):
+            if not self.is_allowed2download(filename):
+                logger.debug("skip: %s", filename)
                 continue
             # <a href="backup.zip">
             # <a href="plugins/">
             await queue.put(url + filename)
 
     async def parse_ds_store(
-        self, file_path: Path, download_url: str, queue: asyncio.Queue
+        self, file_path: Path, base_url: str, queue: asyncio.Queue
     ) -> None:
         with file_path.open('rb') as fp:
             try:
                 # TODO: разобраться как определить тип файла
                 # https://wiki.mozilla.org/DS_Store_File_Format
                 filenames = set(entry.filename for entry in DSStore.open(fp))
-            except buddy.BuddyError:
-                logger.error("invalid format: %s", file_path)
+            except buddy.BuddyError as e:
                 file_path.unlink()
-                return
+                raise errors.Error(f"invalid format: {file_path}") from e
         for filename in filenames:
-            if not self.is_web_accessible(filename):
+            if not self.is_allowed2download(filename):
+                logger.debug("skip: %s", filename)
                 continue
             is_dir = not EXTENSION_RE.search(filename)
+            # Если файл выглядит как каталог проверяем есть ли в нем .DS_Store
             await queue.put(
-                urljoin(
-                    download_url,
-                    # Если файл выглядит как каталог проверяем есть ли в нем
-                    # .DS_Store
-                    filename + ['', '/.DS_Store'][is_dir],
-                )
+                base_url + filename + ['', '/.DS_Store'][is_dir],
             )
-            # Проверяем листинг
-            # if is_dir:
-            #     await queue.put(urljoin(download_url, filename + '/'))
+            # Проверяем на листинг
+            if is_dir:
+                await queue.put(base_url + filename + '/')
 
     async def parse_git_file(
         self,
@@ -329,21 +291,22 @@ class XAccessDumper:
             filenames = []
             with file_path.open('rb') as fp:
                 sig, ver, num_entries = read_struct(fp, '!4s2I')
-                assert sig == b'DIRC'
-                assert ver in (2, 3, 4)
-                assert num_entries > 0
+                assert sig == b'DIRC', "invalid signature"
+                assert ver in (2, 3, 4), "invalid version"
+                assert num_entries > 0, "invalid number of entries"
                 logger.debug("num entries: %d", num_entries)
-                while num_entries:
+                n = num_entries
+                while n > 0:
                     entry_size = fp.tell()
                     fp.seek(40, io.SEEK_CUR)  # file attrs
                     # 20 байт - хеш, 2 байта - флаги
                     # имя файла может храниться в флагах, но не видел такого
                     sha1 = fp.read(22)[:-2].hex()
-                    assert len(sha1) == 40
+                    assert len(sha1) == 40, "invalid sha1"
                     hashes.append(sha1)
                     filename = b''
                     while (c := fp.read(1)) != b'\0':
-                        assert c != b''  # Неожиданный конец
+                        assert c != b'', "unexpected end of index file"
                         filename += c
                     filename = filename.decode()
                     filenames.append(filename)
@@ -352,26 +315,34 @@ class XAccessDumper:
                     # Размер entry кратен 8 (добивается NULL-байтами)
                     fp.seek(entry_size % 8, io.SEEK_CUR)
                     # Есть еще extensions, но они нигде не используются
-                    num_entries -= 1
-            for filename in GIT_COMMON_FILENAMES:
+                    n -= 1
+            for filename in CHECK_GIT_FILES:
                 await queue.put(git_url + filename)
             for sha1 in hashes:
-                await queue.put(git_url + self.hash2filename(sha1))
+                await queue.put(git_url + self.get_obj_filename(sha1))
+            base_url = git_url[: -len(GIT_DIR)]
             # Пробуем скачать файлы напрямую, если .git не получится
             # восстановить, то, возможно, повезет с db.ini
+            dirnames = set()
             for filename in filenames:
-                if self.is_web_accessible(filename):
-                    # /.git + file = /file
-                    await queue.put(urljoin(git_url[:-1], filename))
+                if self.is_allowed2download(filename):
+                    await queue.put(base_url + filename)
+                try:
+                    dirname, _ = filename.rsplit('/', 2)
+                    dirnames.add(dirname)
+                except ValueError:
+                    pass
+            # просканим так же каталоги на листинг содержимого
+            # Например, какой-нибудь backups с .gitkeep
+            for dirname in dirnames:
+                await queue.put(base_url + dirname + '/')
 
         elif file_path.name == 'packs':
             # Содержит строки вида "P <hex>.pack"
             contents = file_path.read_text()
             for sha1 in SHA1_RE.findall(contents):
                 for ext in ('idx', 'pack'):
-                    await queue.put(
-                        urljoin(git_url, f'objects/pack/pack-{sha1}.{ext}')
-                    )
+                    await queue.put(git_url + f'objects/pack/pack-{sha1}.{ext}')
         elif not re.fullmatch(
             r'(pack-)?[a-f\d]{38}(\.(idx|pack))?', file_path.name
         ):
@@ -379,16 +350,11 @@ class XAccessDumper:
                 group = match.groupdict()
                 if group['sha1']:
                     await queue.put(
-                        urljoin(
-                            git_url,
-                            self.hash2filename(group['sha1']),
-                        )
+                        git_url + self.get_obj_filename(group['sha1']),
                     )
                     continue
                 for directory in ('', 'logs/'):
-                    await queue.put(
-                        urljoin(git_url, f"{directory}{group['ref']}")
-                    )
+                    await queue.put(git_url + f"{directory}{group['ref']}")
 
     async def parse_gitignore(
         self, file_path: Path, download_url: str, queue: asyncio.Queue
@@ -401,6 +367,7 @@ class XAccessDumper:
                     continue
                 # Паттерны вида: `*.py[co]`
                 if any(c in filename for c in '*[]'):
+                    logger.warning("can't recognize: %s", filename)
                     continue
                 if filename.startswith('/'):
                     filename = filename[1:]
@@ -412,7 +379,7 @@ class XAccessDumper:
                 else:
                     filenames.append(filename)
         for filename in filenames:
-            if self.is_web_accessible(filename):
+            if self.is_allowed2download(filename):
                 await queue.put(urljoin(download_url, filename))
 
     async def retrieve_source_code(self, git_path: Path) -> None:
@@ -432,7 +399,7 @@ class XAccessDumper:
             logger.info("source retrieved: %s", git_path)
         else:
             logger.error(stderr.decode())
-            logger.error("can't retrieve source: %s", git_path)
+            # logger.error("can't retrieve source: %s", git_path)
 
     async def download_file(
         self,
@@ -440,18 +407,35 @@ class XAccessDumper:
         download_url: str,
         file_path: Path,
     ) -> None:
-        response: aiohttp.ClientResponse
-        async with session.get(download_url, allow_redirects=False) as response:
-            if response.status != OK:
-                raise ValueError(f"{response.status}: {download_url}")
-            ct, _ = cgi.parse_header(response.headers['content-type'])
-            if ct == 'text/html':
-                raise ValueError(f"text/html: {download_url}")
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            with file_path.open('wb') as fp:
-                async for chunk in response.content.iter_chunked(8192):
-                    fp.write(chunk)
-        logger.info("downloaded: %s", download_url)
+        response: ResponseWrapper
+        async with self.fetch(session, download_url) as response:
+            if (
+                response.content_type == 'text/html'
+                and not self.check_extension(download_url, HTML_EXTS)
+            ):
+                raise errors.Error(f"text/html: {download_url}")
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                with file_path.open('wb') as fp:
+                    async for chunk in response.content.iter_chunked(8192):
+                        fp.write(chunk)
+            except Exception as e:
+                if file_path.exists():
+                    logger.debug("delete: %s", file_path)
+                    file_path.unlink()
+                raise e
+
+    @asynccontextmanager
+    async def fetch(
+        self, session: aiohttp.ClientSession, url: str
+    ) -> ResponseWrapper:
+        try:
+            async with session.get(url, allow_redirects=False) as response:
+                if response.status != HTTP_OK:
+                    raise errors.BadResponse(response)
+                yield ResponseWrapper(response)
+        except asyncio.exceptions.TimeoutError as e:
+            raise errors.TimeoutError() from e
 
     @asynccontextmanager
     async def get_session(self) -> typing.AsyncIterable[aiohttp.ClientSession]:
@@ -463,11 +447,16 @@ class XAccessDumper:
             session.headers.setdefault('User-Agent', self.user_agent)
             yield session
 
-    def hash2filename(self, sha1: str) -> str:
+    def get_obj_filename(self, sha1: str) -> str:
         return f'objects/{sha1[:2]}/{sha1[2:]}'
 
-    def is_web_accessible(self, filename: str) -> bool:
-        return not filename.lower().endswith(SCRIPT_EXTS)
+    def check_extension(
+        self, file_or_url: str | Path, ext_or_exts: str | tuple[str, ...]
+    ) -> bool:
+        return str(file_or_url).lower().endswith(ext_or_exts)
+
+    def is_allowed2download(self, file_or_url: str | Path) -> bool:
+        return not self.check_extension(file_or_url, SCRIPT_EXTS + MEDIA_EXTS)
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
