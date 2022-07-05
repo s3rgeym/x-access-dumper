@@ -78,12 +78,6 @@ DB_CONFIGS = tuple(
     permutate_strings(('', 'conf/', 'config/'), ('db', 'database'))
 )
 
-PHP_FILES = tuple(
-    permutate_strings(
-        ('index', 'wp-config', 'settings', *DB_CONFIGS), ('.php',)
-    )
-)
-
 CHECK_FILES = (
     '.git/index',
     '.DS_Store',
@@ -116,9 +110,13 @@ CHECK_FILES = (
     # .swp файлы создает vim, они содержат точку в начале имени
     *map(
         lambda s: re.sub(r'([^/]+\.swp)$', r'.\1', s),
-        permutate_strings(PHP_FILES, ('1', '~', '.bak', '.swp')),
+        permutate_strings(
+            ('index', 'wp-config', 'settings', *DB_CONFIGS),
+            ('.php',),
+            ('1', '~', '.bak', '.swp'),
+        ),
     ),
-    # Проверяем каталоги на листин
+    # Проверяем каталоги на листинг
     *permutate_strings(('dump', 'backup'), ('', 's'), ('/',)),
     # TODO: add more...
 )
