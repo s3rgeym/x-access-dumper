@@ -3,7 +3,6 @@ __all__ = ('XAccessDumper',)
 import asyncio
 import dataclasses
 import io
-import itertools
 import re
 import typing
 from contextlib import asynccontextmanager
@@ -11,6 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import aiohttp
+import aiohttp.client_exceptions
 from aiohttp.typedefs import LooseHeaders
 from ds_store import DSStore, buddy
 
@@ -67,9 +67,11 @@ ULOADABLE_EXTS = (
     '.php4',
     '.php5',
     '.php7',
+    '.phtml',
     '.pl',
     '.png',
     '.psd',
+    '.shtml',
     '.ttf',
     '.webp',
     '.woff',
@@ -442,6 +444,8 @@ class XAccessDumper:
                 if response.status != HTTP_OK:
                     raise errors.BadResponse(response)
                 yield ResponseWrapper(response)
+        except aiohttp.client_exceptions.ServerDisconnectedError as e:
+            raise errors.Error(e.message) from e
         except asyncio.exceptions.TimeoutError as e:
             raise errors.TimeoutError() from e
 
