@@ -43,31 +43,37 @@ SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
 )
 
-SCRIPT_EXTS = (
+ULOADABLE_EXTS = (
+    '.asp',
+    '.avi',
+    '.cgi',
+    '.css',
+    '.eot',
+    '.exe',
+    '.gif',
+    '.htm',
+    '.html',
+    '.jpe',
+    '.jpeg',
+    '.jpg',
+    '.js',
+    '.jsp',
+    '.mp3',
+    '.mp4',
+    '.ogg',
+    '.otf',
     '.php',
     '.php3',
     '.php4',
     '.php5',
     '.php7',
     '.pl',
-    '.jsp',
-    '.asp',
-    '.cgi',
-    '.exe',
-)
-
-MEDIA_EXTS = (
-    '.avi',
-    '.gif',
-    '.jpe',
-    '.jpeg',
-    '.jpg',
-    '.mp3',
-    '.mp4',
-    '.ogg',
     '.png',
     '.psd',
+    '.ttf',
     '.webp',
+    '.woff',
+    '.woff2',
 )
 
 HTML_EXTS = ('.htm', '.html')
@@ -458,7 +464,7 @@ class XAccessDumper:
         return str(file_or_url).lower().endswith(ext_or_exts)
 
     def is_allowed2download(self, file_or_url: str | Path) -> bool:
-        return not self.check_extension(file_or_url, SCRIPT_EXTS + MEDIA_EXTS)
+        return not self.check_extension(file_or_url, ULOADABLE_EXTS)
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
