@@ -16,7 +16,7 @@ from ds_store import DSStore, buddy
 
 from . import errors
 from .logger import logger
-from .utils import make_strings, read_struct
+from .utils import permutate_strings, read_struct
 from .wrappers import ResponseWrapper
 
 HTTP_OK = 200
@@ -74,10 +74,14 @@ HTML_EXTS = ('.htm', '.html')
 
 EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
 
-DB_CONFIGS = tuple(make_strings(('', 'conf/', 'config/'), ('db', 'database')))
+DB_CONFIGS = tuple(
+    permutate_strings(('', 'conf/', 'config/'), ('db', 'database'))
+)
 
 PHP_FILES = tuple(
-    make_strings(('index', 'wp-config', 'settings', *DB_CONFIGS), ('.php',))
+    permutate_strings(
+        ('index', 'wp-config', 'settings', *DB_CONFIGS), ('.php',)
+    )
 )
 
 CHECK_FILES = (
@@ -86,18 +90,18 @@ CHECK_FILES = (
     # dotfiles
     '.profile',
     '.zshenv',
-    *make_strings(('.bash', '.zsh'), ('rc', '_history')),
+    *permutate_strings(('.bash', '.zsh'), ('rc', '_history')),
     # хранятся пароли от сайтов
     '.netrc',
     # часто ключи ssh без пароля
-    *make_strings(('.ssh/',), ('id_rsa', 'id_ed25519'), ('', '.pub')),
+    *permutate_strings(('.ssh/',), ('id_rsa', 'id_ed25519'), ('', '.pub')),
     # бекапы в корне сайта
-    *make_strings(
+    *permutate_strings(
         ('www', '{host}', 'docroot', 'htdocs', 'site', 'backup'),
         ('.zip', '.tar.gz', '.tgz', '.tar', '.gz'),
     ),
     # дампы в корне
-    *make_strings(
+    *permutate_strings(
         ('dump', 'database', 'db'),
         ('.sql',),
     ),
@@ -107,15 +111,15 @@ CHECK_FILES = (
     '.env',
     'prod.env',
     # конфиги
-    *make_strings(DB_CONFIGS, ('.ini', '.conf', '.cfg')),
+    *permutate_strings(DB_CONFIGS, ('.ini', '.conf', '.cfg')),
     # копии php файлов
     # .swp файлы создает vim, они содержат точку в начале имени
     *map(
         lambda s: re.sub(r'([^/]+\.swp)$', r'.\1', s),
-        make_strings(PHP_FILES, ('1', '~', '.bak', '.swp')),
+        permutate_strings(PHP_FILES, ('1', '~', '.bak', '.swp')),
     ),
     # Проверяем каталоги на листин
-    *make_strings(('dump', 'backup'), ('', 's'), ('/',)),
+    *permutate_strings(('dump', 'backup'), ('', 's'), ('/',)),
     # TODO: add more...
 )
 

@@ -19,10 +19,9 @@ def read_struct(fp: typing.BinaryIO, format: str) -> tuple[typing.Any, ...]:
     return struct.unpack(format, fp.read(struct.calcsize(format)))
 
 
-# TODO: cделать по красоте
-def make_strings(*args: typing.Any) -> typing.Iterable[str]:
+def permutate_strings(*args: typing.Any) -> typing.Iterable[str]:
     """
-    >>> list(make_strings(('', 'dir/'), ('file1', 'file2', 'file3'), ('.ext1', '.ext2')))
+    >>> list(permutate_strings(('', 'dir/'), ('file1', 'file2', 'file3'), ('.ext1', '.ext2')))
     ['file1.ext1', 'file1.ext2', 'file2.ext1', 'file2.ext2', 'file3.ext1', 'file3.ext2', 'dir/file1.ext1', 'dir/file1.ext2', 'dir/file2.ext1', 'dir/file2.ext2', 'dir/file3.ext1', 'dir/file3.ext2']
     """
     return map(partial(str.join, ''), itertools.product(*args))
