@@ -23,4 +23,4 @@ $ x-access-dumper -vv https://target 2> log.txt
 
 # TODO:
 
-- exclude images and media files by default 
+- <s>exclude images and media files by default</s> 
