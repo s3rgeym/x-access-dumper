@@ -72,6 +72,7 @@ ULOADABLE_EXTS = (
     '.png',
     '.psd',
     '.shtml',
+    '.svg',
     '.ttf',
     '.webp',
     '.woff',
