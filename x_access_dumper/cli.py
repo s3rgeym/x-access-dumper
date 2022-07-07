@@ -52,7 +52,7 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
     )
     parser.add_argument(
         '--max-timeouts',
-        help="max timeouts per domain",
+        help="max consecutive timeouts per domain",
         type=int,
         default=XAccessDumper.max_timeouts_per_domain,
     )
