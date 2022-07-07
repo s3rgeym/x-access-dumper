@@ -90,7 +90,7 @@ UNLOADABLE_EXTS = (
 
 HTML_EXTS = ('.htm', '.html')
 
-EXTENSION_RE = re.compile(r'\.[a-z]{1,4}[0-9]?$', re.I)
+EXTENSION_RE = re.compile(r'\.\w+$', re.I)
 
 DB_CONFIGS = tuple(
     permutate_strings(('', 'conf/', 'config/'), ('db', 'database'))
