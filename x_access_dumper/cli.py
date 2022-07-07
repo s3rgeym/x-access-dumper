@@ -51,6 +51,12 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
         default=XAccessDumper.timeout,
     )
     parser.add_argument(
+        '--max-timeouts',
+        help="max timeouts per domain",
+        type=int,
+        default=XAccessDumper.max_timeouts_per_domain,
+    )
+    parser.add_argument(
         '-w',
         '--num-workers',
         help="number of workers",
@@ -85,6 +91,7 @@ async def main(argv: typing.Sequence | None = None) -> int | None:
             exclude_pattern=args.exclude_pattern,
             headers=args.header,
             num_workers=args.num_workers,
+            max_timeouts_per_domain=args.max_timeouts,
             override_existing=args.override,
             timeout=args.timeout,
             user_agent=args.user_agent,
