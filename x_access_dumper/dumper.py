@@ -282,7 +282,10 @@ class XAccessDumper:
                     logger.debug('queue size: %d', queue.qsize())
 
     async def parse_directory_listing(
-        self, session: aiohttp.ClientSession, url: str, queue: asyncio.Queue
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        queue: asyncio.Queue,
     ) -> None:
         response: ResponseWrapper
         filenames = []
@@ -307,7 +310,10 @@ class XAccessDumper:
             await queue.put(url + filename)
 
     async def parse_ds_store(
-        self, file_path: Path, base_url: str, queue: asyncio.Queue
+        self,
+        file_path: Path,
+        base_url: str,
+        queue: asyncio.Queue,
     ) -> None:
         with file_path.open('rb') as fp:
             try:
@@ -412,7 +418,10 @@ class XAccessDumper:
                     await queue.put(git_url + f"{directory}{group['ref']}")
 
     async def parse_gitignore(
-        self, file_path: Path, download_url: str, queue: asyncio.Queue
+        self,
+        file_path: Path,
+        download_url: str,
+        queue: asyncio.Queue,
     ) -> None:
         filenames = []
         with file_path.open('r') as fp:
@@ -482,7 +491,9 @@ class XAccessDumper:
 
     @asynccontextmanager
     async def fetch(
-        self, session: aiohttp.ClientSession, url: str
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
     ) -> ResponseWrapper:
         try:
             async with session.get(
