@@ -218,12 +218,17 @@ class XAccessDumper:
                     url = await queue.get()
                     if url is None:
                         break
+                    domain = urlparse(url).netloc
+                    if domain in blacklisted_domains:
+                        logger.warn("blacklisted: %s", domain)
+                        continue
                     if url in seen_urls:
                         logger.debug("already seen %s", url)
                         continue
                     seen_urls.add(url)
                     if url.endswith('/'):
                         await self.parse_directory_listing(session, url, queue)
+                        timeout_attempts[domain] = 0
                         continue
                     # "https://example.org/Old%20Site/.git/index" -> "output/example.org/Old Site/.git/index"
                     file_path = self.url2localpath(url)
@@ -233,10 +238,6 @@ class XAccessDumper:
                         logger.debug("exclude file: %s", file_path)
                         continue
                     if self.override_existing or not file_path.exists():
-                        domain = urlparse(url).netloc
-                        if domain in blacklisted_domains:
-                            logger.warn("blacklisted: %s", domain)
-                            continue
                         await self.download_file(session, url, file_path)
                         logger.info("downloaded: %s", url)
                         timeout_attempts[domain] = 0
@@ -266,9 +267,10 @@ class XAccessDumper:
                             )
                             blacklisted_domains.add(domain)
                 except Exception as e:
-                    logger.exception(e)
+                    logger.error(e)
                 finally:
                     queue.task_done()
+                    logger.debug('queue size: %d', queue.qsize())
 
     async def parse_directory_listing(
         self, session: aiohttp.ClientSession, url: str, queue: asyncio.Queue
