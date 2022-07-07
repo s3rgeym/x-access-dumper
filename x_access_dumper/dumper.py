@@ -1,6 +1,7 @@
 __all__ = ('XAccessDumper',)
 
 import asyncio
+import collections
 import dataclasses
 import io
 import re
@@ -43,7 +44,7 @@ SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
 )
 
-ULOADABLE_EXTS = (
+UNLOADABLE_EXTS = (
     '.asp',
     '.avi',
     '.cgi',
@@ -140,6 +141,7 @@ class XAccessDumper:
     output_directory: str | Path = 'output'
     override_existing: bool = False
     timeout: float = 15.0
+    max_timeouts_per_domain: int = 10
     user_agent: str = (
         "Mozilla/5.0"
         " (compatible; YandexBot/3.0; +http://yandex.com/bots)"
@@ -168,7 +170,6 @@ class XAccessDumper:
         queue = asyncio.Queue()
         normalized_urls = list(map(self.normalize_url, urls))
         url_hosts = {x: urlparse(x).netloc for x in normalized_urls}
-
         # чтобы домены чередовались при запросах
         for filename in CHECK_FILES:
             for url in normalized_urls:
@@ -176,10 +177,16 @@ class XAccessDumper:
 
         # Посещенные ссылки
         seen_urls = set()
+        blacklisted_domains = set()
+        timeout_attempts = collections.Counter()
 
         # Запускаем задания в фоне
         workers = [
-            asyncio.create_task(self.worker(queue, seen_urls))
+            asyncio.create_task(
+                self.worker(
+                    queue, seen_urls, blacklisted_domains, timeout_attempts
+                )
+            )
             for _ in range(self.num_workers)
         ]
 
@@ -198,7 +205,13 @@ class XAccessDumper:
             if git_path.exists():
                 await self.retrieve_source_code(git_path)
 
-    async def worker(self, queue: asyncio.Queue, seen_urls: set[str]) -> None:
+    async def worker(
+        self,
+        queue: asyncio.Queue,
+        seen_urls: set[str],
+        blacklisted_domains: set[str],
+        timeout_attempts: collections.Counter,
+    ) -> None:
         async with self.get_session() as session:
             while True:
                 try:
@@ -220,8 +233,13 @@ class XAccessDumper:
                         logger.debug("exclude file: %s", file_path)
                         continue
                     if self.override_existing or not file_path.exists():
+                        domain = urlparse(url).netloc
+                        if domain in blacklisted_domains:
+                            logger.warn("blacklisted: %s", domain)
+                            continue
                         await self.download_file(session, url, file_path)
                         logger.info("downloaded: %s", url)
+                        timeout_attempts[domain] = 0
                     else:
                         logger.debug("file exists: %s", file_path)
                     if file_path.name == '.DS_Store':
@@ -236,6 +254,17 @@ class XAccessDumper:
                         await self.parse_gitignore(file_path, url, queue)
                 except errors.Error as e:
                     logger.warn(e)
+                    if isinstance(e, errors.TimeoutError):
+                        domain = urlparse(url).netloc
+                        timeout_attempts[domain] += 1
+                        if (
+                            timeout_attempts[domain]
+                            >= self.max_timeouts_per_domain
+                        ):
+                            logger.warn(
+                                "max timeouts per domain exceeded: %s", domain
+                            )
+                            blacklisted_domains.add(domain)
                 except Exception as e:
                     logger.exception(e)
                 finally:
@@ -273,7 +302,11 @@ class XAccessDumper:
             try:
                 # TODO: разобраться как определить тип файла
                 # https://wiki.mozilla.org/DS_Store_File_Format
-                filenames = set(entry.filename for entry in DSStore.open(fp))
+                filenames = set(
+                    x.filename
+                    for x in DSStore.open(fp)
+                    if x.filename not in ('.', '..')
+                )
             except buddy.BuddyError as e:
                 file_path.unlink()
                 raise errors.Error(f"invalid format: {file_path}") from e
@@ -469,7 +502,7 @@ class XAccessDumper:
         return str(file_or_url).lower().endswith(ext_or_exts)
 
     def is_allowed2download(self, file_or_url: str | Path) -> bool:
-        return not self.check_extension(file_or_url, ULOADABLE_EXTS)
+        return not self.check_extension(file_or_url, UNLOADABLE_EXTS)
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
