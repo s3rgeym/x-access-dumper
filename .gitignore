@@ -8,7 +8,6 @@ __pycache__
 /dist
 /output
 /output.old
-/err.log
-/urls.txt
-/*.dump.sql
-/out.txt
+/*.log
+/*.sql
+/*.txt
