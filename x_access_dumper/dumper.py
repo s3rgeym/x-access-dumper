@@ -492,8 +492,8 @@ class XAccessDumper:
                 if response.status != HTTP_OK:
                     raise errors.BadResponse(response)
                 yield ResponseWrapper(response)
-        except aiohttp.client_exceptions.ServerDisconnectedError as e:
-            raise errors.Error(e.message) from e
+        except aiohttp.client_exceptions.ClientError as e:
+            raise errors.Error(getattr(e, 'message', str(e))) from e
         except asyncio.exceptions.TimeoutError as e:
             raise errors.TimeoutError() from e
 
