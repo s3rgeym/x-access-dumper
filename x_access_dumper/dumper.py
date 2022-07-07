@@ -58,6 +58,7 @@ UNLOADABLE_EXTS = (
     '.jpeg',
     '.jpg',
     '.js',
+    '.jsx',
     '.jsp',
     '.mp3',
     '.mp4',
@@ -72,9 +73,12 @@ UNLOADABLE_EXTS = (
     '.pl',
     '.png',
     '.psd',
+    '.scss',
     '.shtml',
     '.svg',
+    '.swf',
     '.ttf',
+    '.vue',
     '.webp',
     '.woff',
     '.woff2',
@@ -135,6 +139,7 @@ CHECK_FILES = (
 @dataclasses.dataclass
 class XAccessDumper:
     _: dataclasses.KW_ONLY
+    allow_redirects: bool = False
     exclude_pattern: re.Pattern | str | None = None
     headers: LooseHeaders | None = None
     num_workers: int = 50
@@ -476,7 +481,10 @@ class XAccessDumper:
         self, session: aiohttp.ClientSession, url: str
     ) -> ResponseWrapper:
         try:
-            async with session.get(url, allow_redirects=False) as response:
+            async with session.get(
+                url,
+                allow_redirects=self.allow_redirects,
+            ) as response:
                 if response.status != HTTP_OK:
                     raise errors.BadResponse(response)
                 yield ResponseWrapper(response)
