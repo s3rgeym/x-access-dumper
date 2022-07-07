@@ -32,6 +32,11 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
         default=XAccessDumper.user_agent,
     )
     parser.add_argument(
+        '--allow-redirects',
+        help="Allow Redirects",
+        default=XAccessDumper.allow_redirects,
+    )
+    parser.add_argument(
         '-e',
         '--exclude-pattern',
         '--exclude',
@@ -88,6 +93,7 @@ async def main(argv: typing.Sequence | None = None) -> int | None:
                     break
                 urls.append(line)
         dumper = XAccessDumper(
+            allow_redirects=args.allow_redirects,
             exclude_pattern=args.exclude_pattern,
             headers=args.header,
             num_workers=args.num_workers,
