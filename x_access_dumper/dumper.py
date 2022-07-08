@@ -279,7 +279,7 @@ class XAccessDumper:
                     logger.error(e)
                 finally:
                     queue.task_done()
-                    logger.debug('queue size: %d', queue.qsize())
+                    # logger.debug('queue size: %d', queue.qsize())
 
     async def parse_directory_listing(
         self,
