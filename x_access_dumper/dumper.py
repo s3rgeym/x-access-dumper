@@ -44,7 +44,7 @@ SHA1_OR_REF_RE = re.compile(
     '(?P<sha1>' + SHA1_RE.pattern + ')|(?P<ref>' + REF_RE.pattern + ')'
 )
 
-UNLOADABLE_EXTS = (
+UNDOWNLOADABLE_EXTS = (
     '.asp',
     '.avi',
     '.cgi',
@@ -109,7 +109,7 @@ CHECK_FILES = (
     *permutate_strings(('.ssh/',), ('id_rsa', 'id_ed25519'), ('', '.pub')),
     # бекапы в корне сайта
     *permutate_strings(
-        ('www', '{host}', 'docroot', 'htdocs', 'site', 'backup'),
+        ('www', 'public_html', '{host}', 'docroot', 'htdocs', 'site', 'backup'),
         ('.zip', '.tar.gz', '.tgz', '.tar', '.gz'),
     ),
     # дампы в корне
@@ -527,7 +527,7 @@ class XAccessDumper:
         return str(file_or_url).lower().endswith(ext_or_exts)
 
     def is_allowed2download(self, file_or_url: str | Path) -> bool:
-        return not self.check_extension(file_or_url, UNLOADABLE_EXTS)
+        return not self.check_extension(file_or_url, UNDOWNLOADABLE_EXTS)
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
