@@ -122,6 +122,7 @@ CHECK_FILES = (
     'docker-compose.yml',
     '.env',
     'prod.env',
+    'production.env',
     # конфиги
     *permutate_strings(DB_CONFIGS, ('.ini', '.conf', '.cfg')),
     # копии php файлов
@@ -136,6 +137,14 @@ CHECK_FILES = (
     ),
     # Проверяем каталоги на листинг
     *permutate_strings(('dump', 'backup'), ('', 's'), ('/',)),
+    'db/',
+    'database/',
+    'sql/',
+    # в этих каталогах могут быть *.bak, *.ini, *.inc
+    'config/',
+    'system/',
+    'include/',
+    'includes/',
     # TODO: add more...
 )
 
@@ -144,6 +153,7 @@ CHECK_FILES = (
 class XAccessDumper:
     _: dataclasses.KW_ONLY
     allow_redirects: bool = False
+    download_all: bool = False
     exclude_pattern: re.Pattern | str | None = None
     headers: LooseHeaders | None = None
     num_workers: int = 50
@@ -527,7 +537,9 @@ class XAccessDumper:
         return str(file_or_url).lower().endswith(ext_or_exts)
 
     def is_allowed2download(self, file_or_url: str | Path) -> bool:
-        return not self.check_extension(file_or_url, UNDOWNLOADABLE_EXTS)
+        return self.download_all or not self.check_extension(
+            file_or_url, UNDOWNLOADABLE_EXTS
+        )
 
     def url2localpath(self, download_url: str) -> Path:
         return self.output_directory.joinpath(
