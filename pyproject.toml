@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "x-access-dumper"
-version = "0.2.0"
+version = "0.2.1"
 description = "Dumps everything web accessible: git repos, files from .DS_Store, sql dumps, backups, configs..."
 authors = ["tz4678 <tz4678@gmail.com>"]
 license = "MIT"
