@@ -33,8 +33,13 @@ def _parse_args(argv: typing.Sequence) -> argparse.Namespace:
     )
     parser.add_argument(
         '--allow-redirects',
-        help="Allow Redirects",
+        help="allow redirects",
         default=XAccessDumper.allow_redirects,
+    )
+    parser.add_argument(
+        '--download-all',
+        help="download all files including images and other",
+        default=XAccessDumper.download_all,
     )
     parser.add_argument(
         '-e',
