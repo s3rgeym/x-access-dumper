@@ -399,7 +399,7 @@ class XAccessDumper:
                 if self.is_allowed2download(filename):
                     await queue.put(base_url + filename)
                 try:
-                    dirname, _ = filename.rsplit('/', 2)
+                    dirname, _ = filename.rsplit('/', 1)
                     dirnames.add(dirname)
                 except ValueError:
                     pass
