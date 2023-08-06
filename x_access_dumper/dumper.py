@@ -4,6 +4,7 @@ import asyncio
 import collections
 import dataclasses
 import io
+import math
 import re
 import typing
 from contextlib import asynccontextmanager
@@ -384,7 +385,7 @@ class XAccessDumper:
                     logger.debug("%s %s", sha1, filename)
                     entry_size -= fp.tell()
                     # Размер entry кратен 8 (добивается NULL-байтами)
-                    fp.seek(entry_size % 8, io.SEEK_CUR)
+                    fp.seek(math.ceil(entry_size / 8) * 8 - entry_size, io.SEEK_CUR)
                     # Есть еще extensions, но они нигде не используются
                     n -= 1
             for filename in CHECK_GIT_FILES:
